@@ -91,9 +91,18 @@ async def get_k3s_nodes():
         nodes = []
         for item in nodes_data.get('items', []):
             status_type = item['status']['conditions'][-1]['type'] if item['status']['conditions'] else 'Unknown'
+            # Check for k3s role labels (values are "true", but we want the role name)
+            labels = item['metadata']['labels']
+            if 'node-role.kubernetes.io/control-plane' in labels:
+                role = 'control-plane'
+            elif 'node-role.kubernetes.io/master' in labels:
+                role = 'master'
+            else:
+                role = 'agent'
+
             nodes.append({
                 "name": item['metadata']['name'],
-                "role": item['metadata']['labels'].get('node-role.kubernetes.io/master', 'agent'),
+                "role": role,
                 "status": status_type,
             })
         return {"nodes": nodes}

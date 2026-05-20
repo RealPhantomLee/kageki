@@ -5,6 +5,19 @@ import type { SyncMessage } from '../types/index';
 import axios from 'axios';
 import { formatDistanceToNow } from 'date-fns';
 import { marked } from 'marked';
+import hljs from 'highlight.js';
+import 'highlight.js/styles/atom-one-dark.css';
+
+// Configure marked with highlight.js
+marked.setOptions({
+  highlight: (code, lang) => {
+    if (lang && hljs.getLanguage(lang)) {
+      return hljs.highlight(code, { language: lang }).value;
+    }
+    return hljs.highlightAuto(code).value;
+  },
+});
+
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Drawer, DrawerHeader, DrawerContent } from '../components/ui/drawer';
