@@ -17,6 +17,9 @@ export default {
           'text-muted': '#8b8b8b',
           accent: '#7c3aed',
           'accent-light': '#a855f7',
+          success: '#0fb981',
+          warning: '#f39c12',
+          error: '#e74c3c',
         },
         /* Override gray for dark theme */
         gray: {

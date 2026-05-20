@@ -8,7 +8,8 @@ from datetime import datetime
 from typing import Optional
 
 import aiosqlite
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from backend.db.connection import get_connection
@@ -18,6 +19,13 @@ from backend.services.markdown_utils import (
     compute_content_hash,
     serialize_json_field,
     deserialize_json_field,
+)
+from backend.services.import_service import (
+    import_obsidian_md,
+    import_apple_notes_enex,
+    import_google_docs_html,
+    import_notion_zip,
+    import_chatgpt_zip,
 )
 
 log = logging.getLogger(__name__)
@@ -232,6 +240,116 @@ async def update_note(note_id: str, body: UpdateNoteRequest):
     except Exception as e:
         log.error(f"Error updating note {note_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to update note")
+
+    finally:
+        await db.close()
+
+
+@router.post("/import")
+async def import_notes(source: str = Form(...), file: UploadFile = File(...)):
+    """
+    Import notes from various formats.
+
+    Request: multipart/form-data with source and file
+    - source: markdown|enex|html|notion|chatgpt
+    - file: upload file
+
+    Returns: {"imported": <count>}
+    """
+    file_bytes = await file.read()
+
+    try:
+        if source == "markdown":
+            notes = await import_obsidian_md(file_bytes)
+        elif source == "enex":
+            notes = await import_apple_notes_enex(file_bytes)
+        elif source == "html":
+            notes = await import_google_docs_html(file_bytes)
+        elif source == "notion":
+            notes = await import_notion_zip(file_bytes)
+        elif source == "chatgpt":
+            notes = await import_chatgpt_zip(file_bytes)
+        else:
+            raise HTTPException(status_code=400, detail="Unknown source")
+
+        # Bulk insert
+        db = await get_connection()
+        try:
+            now = datetime.utcnow().isoformat()
+            inserted_count = 0
+
+            for note_data in notes:
+                note_id = str(uuid.uuid4())
+                title = note_data.title.strip()
+                content = note_data.content.strip()
+
+                if not title:
+                    title = "Untitled"
+                if not content:
+                    continue
+
+                # Extract links and tags from content
+                links = extract_links(content)
+                tags = extract_tags(content)
+
+                # Compute content hash for conflict detection
+                content_hash = compute_content_hash(content)
+
+                # Serialize links and tags as JSON
+                links_json = serialize_json_field(links)
+                tags_json = serialize_json_field(tags)
+
+                # Insert into database
+                await db.execute(
+                    """
+                    INSERT INTO notes (id, title, content, tags, outgoing_links, content_hash, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (note_id, title, content, tags_json, links_json, content_hash, now, now),
+                )
+                inserted_count += 1
+
+            await db.commit()
+            log.info(f"Imported {inserted_count} notes from {source}")
+
+            return {"imported": inserted_count}
+
+        finally:
+            await db.close()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Error importing notes: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to import notes: {str(e)}")
+
+
+@router.get("/{note_id}/export")
+async def export_note(note_id: str):
+    """
+    Export a note as plaintext markdown file.
+
+    Returns: .md file download with proper markdown headers
+    """
+    db = await get_connection()
+    try:
+        cursor = await db.execute(
+            "SELECT title, content FROM notes WHERE id = ?",
+            (note_id,),
+        )
+        row = await cursor.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Note not found")
+
+        title, content = row
+        markdown = f"# {title}\n\n{content}"
+
+        return Response(
+            content=markdown,
+            media_type="text/markdown",
+            headers={"Content-Disposition": f"attachment; filename={note_id}.md"},
+        )
 
     finally:
         await db.close()

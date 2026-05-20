@@ -10,7 +10,7 @@ import aiomqtt
 
 from backend.config import get_settings
 from backend.db.connection import run_migrations_async
-from backend.routers import homeassistant, ai, security, notes, push, cluster
+from backend.routers import homeassistant, ai, security, notes, push, cluster, infra
 from backend.services.ai_service import DeepSeekClient
 from backend.services.ollama_cluster import get_ollama_cluster
 
@@ -151,6 +151,7 @@ app.include_router(ai.router)
 app.include_router(homeassistant.router)
 app.include_router(push.router)
 app.include_router(cluster.router)
+app.include_router(infra.router)
 
 
 @app.get("/health")

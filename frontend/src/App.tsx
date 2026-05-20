@@ -3,10 +3,17 @@ import { useAppStore } from "./stores/appStore";
 import { HomePanel } from "./panels/HomePanel";
 import { NotesPanel } from "./panels/NotesPanel";
 import { SecurityPanel } from "./panels/SecurityPanel";
+import { InfraPanel } from "./panels/InfraPanel";
 
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: string }>;
+}
+
+interface HealthStatus {
+  api: boolean;
+  nodeCount: number;
+  mqtt: boolean;
 }
 
 export const App: React.FC = () => {
@@ -15,6 +22,11 @@ export const App: React.FC = () => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const [isPWAInstalled, setIsPWAInstalled] = useState(false);
+  const [health, setHealth] = useState<HealthStatus>({
+    api: false,
+    nodeCount: 0,
+    mqtt: false,
+  });
 
   // Handle window resize for responsive layout
   useEffect(() => {
@@ -59,6 +71,44 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Poll health endpoint every 10 seconds
+  useEffect(() => {
+    const pollHealth = async () => {
+      try {
+        const response = await fetch("/health");
+        const isHealthy = response.status === 200;
+
+        if (isHealthy) {
+          const data = await response.json();
+          setHealth({
+            api: true,
+            nodeCount: data.nodes ? Object.keys(data.nodes).length : 0,
+            mqtt: data.mqtt?.connected || false,
+          });
+        } else {
+          setHealth({
+            api: false,
+            nodeCount: 0,
+            mqtt: false,
+          });
+        }
+      } catch (err) {
+        console.error("Health check failed:", err);
+        setHealth({
+          api: false,
+          nodeCount: 0,
+          mqtt: false,
+        });
+      }
+    };
+
+    // Poll immediately and then every 10 seconds
+    pollHealth();
+    const interval = setInterval(pollHealth, 10000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   const handleInstallApp = useCallback(async () => {
     if (!installPrompt) return;
 
@@ -75,7 +125,7 @@ export const App: React.FC = () => {
     }
   }, [installPrompt]);
 
-  const handleTabChange = (tab: "home" | "notes" | "security") => {
+  const handleTabChange = (tab: "home" | "notes" | "security" | "infrastructure") => {
     setActiveTab(tab);
     setMenuOpen(false);
   };
@@ -88,6 +138,8 @@ export const App: React.FC = () => {
         return <NotesPanel />;
       case "security":
         return <SecurityPanel />;
+      case "infrastructure":
+        return <InfraPanel />;
       default:
         return <HomePanel />;
     }
@@ -97,6 +149,7 @@ export const App: React.FC = () => {
     { id: "home", label: "Home", icon: "🏠" },
     { id: "notes", label: "Notes", icon: "📝" },
     { id: "security", label: "Security", icon: "🔒" },
+    { id: "infrastructure", label: "Infrastructure", icon: "⚡" },
   ] as const;
 
   if (isMobile) {
@@ -120,7 +173,7 @@ export const App: React.FC = () => {
               {navItems.map(({ id, label, icon }) => (
                 <button
                   key={id}
-                  onClick={() => handleTabChange(id as "home" | "notes" | "security")}
+                  onClick={() => handleTabChange(id as "home" | "notes" | "security" | "infrastructure")}
                   className={`px-4 py-3 text-left transition ${
                     activeTab === id
                       ? "bg-obsidian-accent text-white font-semibold"
@@ -161,11 +214,11 @@ export const App: React.FC = () => {
         </div>
 
         {/* Mobile Footer */}
-        <div className="bg-obsidian-surface border-t border-obsidian-border grid grid-cols-3 gap-1 p-2">
+        <div className="bg-obsidian-surface border-t border-obsidian-border grid grid-cols-4 gap-1 p-2">
           {navItems.map(({ id, label, icon }) => (
             <button
               key={id}
-              onClick={() => handleTabChange(id as "home" | "notes" | "security")}
+              onClick={() => handleTabChange(id as "home" | "notes" | "security" | "infrastructure")}
               className={`py-2 px-3 rounded transition flex flex-col items-center gap-1 ${
                 activeTab === id
                   ? "bg-obsidian-accent text-white font-semibold"
@@ -192,11 +245,11 @@ export const App: React.FC = () => {
         </div>
 
         {/* Navigation Icons */}
-        <nav className="flex flex-col gap-4">
+        <nav className="flex flex-col gap-2">
           {navItems.map(({ id, label, icon }) => (
             <button
               key={id}
-              onClick={() => handleTabChange(id as "home" | "notes" | "security")}
+              onClick={() => handleTabChange(id as "home" | "notes" | "security" | "infrastructure")}
               className={`w-12 h-12 rounded-lg flex items-center justify-center transition-all relative group ${
                 activeTab === id
                   ? "bg-obsidian-accent text-white"
@@ -275,15 +328,15 @@ export const App: React.FC = () => {
         <div className="bg-obsidian-surface border-t border-obsidian-border px-6 py-2 flex items-center justify-between text-xs text-obsidian-text-muted">
           <div className="flex gap-6">
             <div className="flex items-center gap-1">
-              <span className="w-1.5 h-1.5 bg-obsidian-success rounded-full"></span>
+              <span className={`w-1.5 h-1.5 rounded-full ${health.api ? 'bg-obsidian-success' : 'bg-obsidian-error'}`}></span>
               <span>API Connected</span>
             </div>
             <div className="flex items-center gap-1">
-              <span className="w-1.5 h-1.5 bg-obsidian-success rounded-full"></span>
-              <span>3 Nodes</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${health.nodeCount > 0 ? 'bg-obsidian-success' : 'bg-obsidian-error'}`}></span>
+              <span>{health.nodeCount} Node{health.nodeCount !== 1 ? 's' : ''}</span>
             </div>
             <div className="flex items-center gap-1">
-              <span className="w-1.5 h-1.5 bg-obsidian-success rounded-full"></span>
+              <span className={`w-1.5 h-1.5 rounded-full ${health.mqtt ? 'bg-obsidian-success' : 'bg-obsidian-error'}`}></span>
               <span>MQTT Live</span>
             </div>
           </div>

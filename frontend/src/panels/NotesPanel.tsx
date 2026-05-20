@@ -1,16 +1,18 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useNotesStore } from '../stores/notes';
 import { createSyncWSManager } from '../api/websocket';
-import type { Note, SyncMessage } from '../types/index';
+import type { SyncMessage } from '../types/index';
 import axios from 'axios';
 import { formatDistanceToNow } from 'date-fns';
+import { marked } from 'marked';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Drawer, DrawerHeader, DrawerContent } from '../components/ui/drawer';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Separator } from '../components/ui/separator';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import * as d3 from 'd3';
-import { Search, Plus, Trash2, Share2, Zap, MessageCircle } from 'lucide-react';
+import { Search, Plus, Trash2, Share2, Zap, MessageCircle, Upload } from 'lucide-react';
 
 export const NotesPanel: React.FC = () => {
   const {
@@ -43,11 +45,18 @@ export const NotesPanel: React.FC = () => {
   const [showGraphModal, setShowGraphModal] = useState(false);
   const [showChatDrawer, setShowChatDrawer] = useState(false);
   const [chatMessages, setChatMessages] = useState<Array<{ role: string; content: string }>>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [importSource, setImportSource] = useState<string>('markdown');
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importLoading, setImportLoading] = useState(false);
   const wsManagerRef = useRef<ReturnType<typeof createSyncWSManager> | null>(null);
   const saveTimeoutRef = useRef<NodeJS.Timer | null>(null);
   const graphContainerRef = useRef<SVGSVGElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Load notes on mount
   useEffect(() => {
@@ -302,6 +311,105 @@ export const NotesPanel: React.FC = () => {
     }
   };
 
+  const handleImportNotes = async () => {
+    if (!importFile) return;
+    setImportLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', importFile);
+      formData.append('source', importSource);
+      const resp = await axios.post('/api/notes/import', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      // Show success - imported notes count
+      const importedCount = resp.data.count || 1;
+      setError(null);
+      await loadNotes();
+      setShowImportDialog(false);
+      setImportFile(null);
+      setImportSource('markdown');
+    } catch (err) {
+      setError(`Failed to import notes: ${String(err)}`);
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const handleChatSubmit = async (e: React.KeyboardEvent<HTMLInputElement> | React.MouseEvent) => {
+    if ('key' in e && e.key !== 'Enter') return;
+    if (!chatInput.trim() || !activeNoteId) return;
+
+    const userMessage = chatInput.trim();
+    setChatInput('');
+    setChatMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+    setChatLoading(true);
+
+    try {
+      const response = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: userMessage,
+          note_id: activeNoteId,
+          context: editorContent,
+        }),
+      });
+
+      if (!response.body) {
+        throw new Error('No response body');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let assistantMessage = '';
+
+      // Add placeholder for streaming response
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.content) {
+                assistantMessage += data.content;
+                // Update last message with streaming content
+                setChatMessages((prev) => {
+                  const updated = [...prev];
+                  updated[updated.length - 1].content = assistantMessage;
+                  return updated;
+                });
+              }
+            } catch (e) {
+              // Ignore parse errors for SSE
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Chat error:', err);
+      setChatMessages((prev) => [...prev, {
+        role: 'assistant',
+        content: 'Error: Could not connect to AI service',
+      }]);
+    } finally {
+      setChatLoading(false);
+    }
+
+    // Auto-scroll to bottom
+    setTimeout(() => {
+      if (chatScrollRef.current) {
+        chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+      }
+    }, 0);
+  };
+
   const filteredNotes = getFilteredNotes();
   const activeNote = getActiveNote();
   const backlinks = notes.filter((n) => (n.outgoing_links || []).includes(activeNoteId || ''));
@@ -316,11 +424,20 @@ export const NotesPanel: React.FC = () => {
           <div className="p-4 border-b border-obsidian-border">
             <Button
               onClick={handleNewNote}
-              className="w-full mb-4"
+              className="w-full mb-3"
               variant="default"
             >
               <Plus className="w-4 h-4 mr-2" />
               New Note
+            </Button>
+
+            <Button
+              onClick={() => setShowImportDialog(true)}
+              variant="outline"
+              className="w-full mb-4"
+            >
+              <Upload className="w-4 h-4 mr-2" />
+              Import
             </Button>
 
             {wsConnected && (
@@ -412,7 +529,7 @@ export const NotesPanel: React.FC = () => {
                     value={editorContent}
                     onChange={(e) => setEditorContent(e.target.value)}
                     placeholder="Start typing markdown..."
-                    className="w-full h-full bg-obsidian-bg text-obsidian-text outline-none resize-none font-mono text-sm p-6"
+                    className="w-full h-full bg-obsidian-bg text-obsidian-text outline-none resize-none font-mono text-sm p-6 transition-opacity duration-200"
                   />
                 </div>
 
@@ -420,10 +537,13 @@ export const NotesPanel: React.FC = () => {
                 {showPreview && (
                   <>
                     <Separator orientation="vertical" />
-                    <div className="w-1/2 overflow-y-auto p-6 prose prose-invert max-w-none">
-                      <div className="text-obsidian-text whitespace-pre-wrap break-words">
-                        {editorContent}
-                      </div>
+                    <div className="w-1/2 overflow-y-auto p-6 glass-card">
+                      <div
+                        className="prose prose-invert max-w-none text-obsidian-text"
+                        dangerouslySetInnerHTML={{
+                          __html: marked.parse(editorContent) as string,
+                        }}
+                      />
                     </div>
                   </>
                 )}
@@ -597,7 +717,10 @@ export const NotesPanel: React.FC = () => {
           <h2 className="text-lg font-semibold text-obsidian-text">AI Chat</h2>
         </DrawerHeader>
         <DrawerContent className="flex flex-col h-full bg-obsidian-bg">
-          <div className="flex-1 overflow-y-auto space-y-4">
+          <div
+            ref={chatScrollRef}
+            className="flex-1 overflow-y-auto space-y-4 p-4 transition-opacity duration-200"
+          >
             {chatMessages.length === 0 && (
               <div className="text-center text-obsidian-text-muted py-8">
                 Start chatting about your note...
@@ -606,26 +729,93 @@ export const NotesPanel: React.FC = () => {
             {chatMessages.map((msg, idx) => (
               <div
                 key={idx}
-                className={`px-4 py-2 rounded ${
+                className={`px-4 py-2 rounded transition-all duration-200 ${
                   msg.role === 'user'
                     ? 'bg-obsidian-accent/20 text-obsidian-text ml-8'
                     : 'bg-obsidian-surface-hover text-obsidian-text mr-8'
                 }`}
               >
-                {msg.content}
+                <div
+                  dangerouslySetInnerHTML={{ __html: marked.parse(msg.content) as string }}
+                  className="prose prose-invert max-w-none"
+                />
               </div>
             ))}
+            {chatLoading && (
+              <div className="px-4 py-2 rounded bg-obsidian-surface-hover text-obsidian-text mr-8">
+                <span className="animate-pulse">Thinking...</span>
+              </div>
+            )}
           </div>
           <div className="p-4 border-t border-obsidian-border flex gap-2">
             <input
               type="text"
               placeholder="Ask about this note..."
-              className="flex-1 bg-obsidian-surface-hover border border-obsidian-border text-obsidian-text px-3 py-2 rounded text-sm focus:outline-none focus:border-obsidian-accent"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyPress={handleChatSubmit}
+              disabled={chatLoading}
+              className="flex-1 bg-obsidian-surface-hover border border-obsidian-border text-obsidian-text px-3 py-2 rounded text-sm focus:outline-none focus:border-obsidian-accent disabled:opacity-50 transition"
             />
-            <Button variant="default" size="sm">Send</Button>
+            <Button
+              onClick={handleChatSubmit}
+              variant="default"
+              size="sm"
+              disabled={!chatInput.trim() || chatLoading}
+            >
+              Send
+            </Button>
           </div>
         </DrawerContent>
       </Drawer>
+
+      {/* Import Dialog */}
+      {showImportDialog && (
+        <Dialog open={showImportDialog} onOpenChange={setShowImportDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Import Notes</DialogTitle>
+            </DialogHeader>
+
+            {/* Source Selector */}
+            <div className="space-y-3">
+              <label className="block">
+                <span className="text-sm font-medium text-obsidian-text mb-2 block">Source Format</span>
+                <select
+                  value={importSource}
+                  onChange={(e) => setImportSource(e.target.value)}
+                  className="w-full bg-obsidian-surface-hover border border-obsidian-border text-obsidian-text px-3 py-2 rounded"
+                >
+                  <option value="markdown">Markdown (.md)</option>
+                  <option value="enex">Apple Notes (.enex)</option>
+                  <option value="html">Google Docs (.html)</option>
+                  <option value="notion">Notion (zip)</option>
+                  <option value="chatgpt">ChatGPT (zip)</option>
+                </select>
+              </label>
+
+              {/* File Drag & Drop */}
+              <label className="block border-2 border-dashed border-obsidian-border rounded-lg p-6 text-center cursor-pointer hover:bg-obsidian-surface-hover transition">
+                <input
+                  type="file"
+                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                  className="hidden"
+                />
+                <div className="text-obsidian-text-muted">
+                  {importFile ? importFile.name : 'Click to select or drag & drop'}
+                </div>
+              </label>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowImportDialog(false)}>Cancel</Button>
+              <Button onClick={handleImportNotes} disabled={!importFile || importLoading}>
+                {importLoading ? 'Importing...' : 'Import'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 };
