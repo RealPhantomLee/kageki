@@ -66,6 +66,7 @@ export const NotesPanel: React.FC = () => {
   const [importSource, setImportSource] = useState<string>('markdown');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importLoading, setImportLoading] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const wsManagerRef = useRef<ReturnType<typeof createSyncWSManager> | null>(null);
   const saveTimeoutRef = useRef<NodeJS.Timer | null>(null);
   const graphContainerRef = useRef<SVGSVGElement | null>(null);
@@ -432,33 +433,41 @@ export const NotesPanel: React.FC = () => {
       {/* 4-Zone Layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Zone 1: Left File Tree */}
-        <div className="w-64 border-r border-obsidian-border flex flex-col bg-obsidian-surface">
+        <div className={`${sidebarCollapsed ? 'w-0' : 'w-64'} transition-all border-r border-obsidian-border flex flex-col glass-card overflow-hidden`}>
           {/* Header */}
-          <div className="p-4 border-b border-obsidian-border">
-            <Button
-              onClick={handleNewNote}
-              className="w-full mb-3"
-              variant="default"
+          <div className="p-4 border-b border-obsidian-border flex items-center gap-2">
+            <button
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              className="p-2 hover:bg-obsidian-surface-hover rounded transition flex-shrink-0"
             >
-              <Plus className="w-4 h-4 mr-2" />
-              New Note
-            </Button>
+              {sidebarCollapsed ? '▶' : '◀'}
+            </button>
+            <div className="flex-1 flex flex-col gap-3">
+              <Button
+                onClick={handleNewNote}
+                className="w-full"
+                variant="default"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                New Note
+              </Button>
 
-            <Button
-              onClick={() => setShowImportDialog(true)}
-              variant="outline"
-              className="w-full mb-4"
-            >
-              <Upload className="w-4 h-4 mr-2" />
-              Import
-            </Button>
+              <Button
+                onClick={() => setShowImportDialog(true)}
+                variant="outline"
+                className="w-full"
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                Import
+              </Button>
 
-            {wsConnected && (
-              <Badge variant="success" className="text-xs">
-                <span className="w-1.5 h-1.5 bg-obsidian-success rounded-full mr-1 animate-pulse"></span>
-                Syncing
-              </Badge>
-            )}
+              {wsConnected && (
+                <Badge variant="success" className="text-xs w-full">
+                  <span className="w-1.5 h-1.5 bg-obsidian-success rounded-full mr-1 animate-pulse"></span>
+                  Syncing
+                </Badge>
+              )}
+            </div>
           </div>
 
           {/* Search */}
@@ -509,11 +518,11 @@ export const NotesPanel: React.FC = () => {
         </div>
 
         {/* Zone 2: Center Editor + Preview */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-y-auto h-full">
           {activeNote ? (
             <>
               {/* Editor Header */}
-              <div className="px-6 py-4 border-b border-obsidian-border flex items-center justify-between bg-obsidian-surface">
+              <div className="px-6 py-4 border-b border-obsidian-border flex items-center justify-between glass-card">
                 <div className="flex-1">
                   <input
                     type="text"
@@ -550,7 +559,7 @@ export const NotesPanel: React.FC = () => {
                 {showPreview && (
                   <>
                     <Separator orientation="vertical" />
-                    <div className="w-1/2 overflow-y-auto p-6 glass-card">
+                    <div className="w-1/2 overflow-y-auto p-6 h-full">
                       <div
                         className="prose prose-invert max-w-none text-obsidian-text"
                         dangerouslySetInnerHTML={{
@@ -563,7 +572,7 @@ export const NotesPanel: React.FC = () => {
               </div>
 
               {/* Action Buttons */}
-              <div className="px-6 py-4 border-t border-obsidian-border bg-obsidian-surface flex flex-wrap gap-2">
+              <div className="px-6 py-4 border-t border-obsidian-border glass-card flex flex-wrap gap-2">
                 <Button
                   onClick={() => setShowPreview(!showPreview)}
                   variant={showPreview ? 'default' : 'outline'}
@@ -623,7 +632,7 @@ export const NotesPanel: React.FC = () => {
 
               {/* Key Points Display */}
               {keyPoints.length > 0 && (
-                <div className="px-6 py-3 border-t border-obsidian-border bg-obsidian-surface/50">
+                <div className="px-6 py-3 border-t border-obsidian-border glass-card">
                   <div className="text-sm font-semibold mb-2">Key Points:</div>
                   <ul className="space-y-1 text-sm text-obsidian-text">
                     {keyPoints.map((point, idx) => (
@@ -656,7 +665,7 @@ export const NotesPanel: React.FC = () => {
 
         {/* Zone 3: Right Backlinks + Graph */}
         {activeNote && (
-          <div className="w-72 border-l border-obsidian-border flex flex-col bg-obsidian-surface overflow-hidden">
+          <div className="w-72 border-l border-obsidian-border flex flex-col glass-card overflow-y-auto h-full">
             {/* Backlinks Header */}
             <div className="p-4 border-b border-obsidian-border">
               <h3 className="font-semibold text-obsidian-text">Backlinks</h3>
@@ -700,7 +709,7 @@ export const NotesPanel: React.FC = () => {
       {showGraphModal && (
         <div className="fixed inset-0 z-40 bg-black/80 flex items-center justify-center" onClick={() => setShowGraphModal(false)}>
           <div
-            className="bg-obsidian-surface border border-obsidian-border rounded-lg p-6 w-4/5 h-4/5 flex flex-col"
+            className="glass-card border border-obsidian-border rounded-lg p-6 w-4/5 h-4/5 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="text-2xl font-bold mb-4 text-obsidian-text">Note Graph</h2>
@@ -729,7 +738,7 @@ export const NotesPanel: React.FC = () => {
         <DrawerHeader onClose={() => setShowChatDrawer(false)}>
           <h2 className="text-lg font-semibold text-obsidian-text">AI Chat</h2>
         </DrawerHeader>
-        <DrawerContent className="flex flex-col h-full bg-obsidian-bg">
+        <DrawerContent className="flex flex-col h-full glass-card">
           <div
             ref={chatScrollRef}
             className="flex-1 overflow-y-auto space-y-4 p-4 transition-opacity duration-200"
@@ -808,7 +817,7 @@ export const NotesPanel: React.FC = () => {
               </label>
 
               {/* File Drag & Drop */}
-              <label className="block border-2 border-dashed border-obsidian-border rounded-lg p-6 text-center cursor-pointer hover:bg-obsidian-surface-hover transition">
+              <label className="block border-2 border-dashed border-obsidian-border rounded-lg p-6 text-center cursor-pointer hover:bg-obsidian-surface-hover transition glass-card">
                 <input
                   type="file"
                   onChange={(e) => setImportFile(e.target.files?.[0] || null)}

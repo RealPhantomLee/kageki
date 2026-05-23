@@ -3,12 +3,18 @@ import { useSecurityStore } from '../stores/security';
 import { createSecurityWSManager } from '../api/websocket';
 import type { SecurityEvent, Camera, MotionEventMessage } from '../types/index';
 import axios from 'axios';
-import { formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow, format } from 'date-fns';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { ScrollArea } from '../components/ui/scroll-area';
-import { Separator } from '../components/ui/separator';
-import { Shield, Camera, AlertTriangle } from 'lucide-react';
+import { Dialog, DialogContent } from '../components/ui/dialog';
+import { Shield, Camera, AlertTriangle, X, RefreshCw, ZoomIn, CheckCircle2, Circle } from 'lucide-react';
+
+interface CameraSnapshot {
+  cameraId: string;
+  snapshot: string;
+  lastUpdated: number;
+}
 
 export const SecurityPanel: React.FC = () => {
   const {
@@ -28,13 +34,18 @@ export const SecurityPanel: React.FC = () => {
     setError,
   } = useSecurityStore();
 
-  const [snapshot, setSnapshot] = useState<string | null>(null);
-  const [snapshotLoading, setSnapshotLoading] = useState(false);
+  // Local state for new design
+  const [cameraSnapshots, setCameraSnapshots] = useState<Map<string, CameraSnapshot>>(new Map());
+  const [fullscreenCameraId, setFullscreenCameraId] = useState<string | null>(null);
+  const [selectedEventForModal, setSelectedEventForModal] = useState<SecurityEvent | null>(null);
   const [motionAlert, setMotionAlert] = useState(false);
-  const [lastEventTime, setLastEventTime] = useState<Date | null>(null);
+  const [lastMotionTime, setLastMotionTime] = useState<Date | null>(null);
+  const [armDisarmTime, setArmDisarmTime] = useState<Date | null>(null);
+
   const wsManagerRef = useRef<ReturnType<typeof createSecurityWSManager> | null>(null);
   const snapshotIntervalRef = useRef<NodeJS.Timer | null>(null);
   const alertTimeoutRef = useRef<NodeJS.Timer | null>(null);
+  const fullscreenIntervalRef = useRef<NodeJS.Timer | null>(null);
 
   // Load cameras on mount
   useEffect(() => {
@@ -42,11 +53,13 @@ export const SecurityPanel: React.FC = () => {
       try {
         setLoading(true);
         const response = await axios.get('/api/security/cameras');
-        setCameras(response.data.cameras || []);
-        // Select first camera if available
-        if (response.data.cameras && response.data.cameras.length > 0) {
-          selectCamera(response.data.cameras[0].id);
-        }
+        const camerasList = response.data.cameras || [];
+        setCameras(camerasList);
+
+        // Load initial snapshots for all cameras
+        camerasList.forEach((camera: Camera) => {
+          loadCameraSnapshot(camera.id);
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load cameras');
       } finally {
@@ -55,7 +68,7 @@ export const SecurityPanel: React.FC = () => {
     };
 
     loadCameras();
-  }, [setCameras, setLoading, setError, selectCamera]);
+  }, [setCameras, setLoading, setError]);
 
   // Load initial events
   useEffect(() => {
@@ -87,7 +100,7 @@ export const SecurityPanel: React.FC = () => {
         created_at: new Date().toISOString(),
       };
       addEvent(newEvent);
-      setLastEventTime(new Date());
+      setLastMotionTime(new Date());
 
       // Trigger motion alert animation
       if (message.confidence > 0.7) {
@@ -135,36 +148,55 @@ export const SecurityPanel: React.FC = () => {
     };
   }, [addEvent, setWsConnected]);
 
-  // Load snapshot for selected camera
+  // Refresh snapshots every 5 seconds for all cameras
   useEffect(() => {
-    const loadSnapshot = async () => {
-      if (!selectedCamera) return;
+    const interval = setInterval(() => {
+      cameras.forEach((camera) => {
+        loadCameraSnapshot(camera.id);
+      });
+    }, 5000);
 
-      try {
-        setSnapshotLoading(true);
-        const response = await axios.get(`/api/security/snapshot/${selectedCamera}`, {
-          responseType: 'blob',
-        });
-        const blobUrl = URL.createObjectURL(response.data);
-        setSnapshot(blobUrl);
-      } catch (err) {
-        console.error('Failed to load snapshot:', err);
-      } finally {
-        setSnapshotLoading(false);
-      }
-    };
-
-    loadSnapshot();
-
-    // Refresh snapshot every 5 seconds
-    snapshotIntervalRef.current = setInterval(loadSnapshot, 5000);
+    snapshotIntervalRef.current = interval;
 
     return () => {
-      if (snapshotIntervalRef.current) {
-        clearInterval(snapshotIntervalRef.current);
+      clearInterval(interval);
+    };
+  }, [cameras]);
+
+  // Fullscreen camera auto-refresh every 3 seconds
+  useEffect(() => {
+    if (fullscreenCameraId) {
+      fullscreenIntervalRef.current = setInterval(() => {
+        loadCameraSnapshot(fullscreenCameraId);
+      }, 3000);
+    }
+
+    return () => {
+      if (fullscreenIntervalRef.current) {
+        clearInterval(fullscreenIntervalRef.current);
       }
     };
-  }, [selectedCamera]);
+  }, [fullscreenCameraId]);
+
+  const loadCameraSnapshot = async (cameraId: string) => {
+    try {
+      const response = await axios.get(`/api/security/snapshot/${cameraId}`, {
+        responseType: 'blob',
+      });
+      const blobUrl = URL.createObjectURL(response.data);
+      setCameraSnapshots((prev) => {
+        const updated = new Map(prev);
+        updated.set(cameraId, {
+          cameraId,
+          snapshot: blobUrl,
+          lastUpdated: Date.now(),
+        });
+        return updated;
+      });
+    } catch (err) {
+      console.error(`Failed to load snapshot for camera ${cameraId}:`, err);
+    }
+  };
 
   const handleArmToggle = async (systemId: string = 'default') => {
     try {
@@ -174,188 +206,212 @@ export const SecurityPanel: React.FC = () => {
         state: !currentArmed,
       });
       setArmed(systemId, response.data.armed);
+      setArmDisarmTime(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to arm/disarm system');
     }
   };
 
-  const selectedCameraObj = cameras.find((c) => c.id === selectedCamera);
   const isArmed = armedSystems.get('default') ?? false;
-  const recentEvents = events.slice(0, 10);
-  const highConfidenceEvents = events.filter((e) => e.confidence > 0.8);
+  const motionEvents = events.filter((e) => e.confidence > 0);
+  const lastMotionEvent = motionEvents[0];
+
+  const getConfidenceColor = (confidence: number) => {
+    if (confidence > 0.9) return 'bg-obsidian-success';
+    if (confidence > 0.7) return 'bg-obsidian-warning';
+    return 'bg-obsidian-error';
+  };
+
+  const getConfidenceBgColor = (confidence: number) => {
+    if (confidence > 0.9) return 'bg-green-900/30';
+    if (confidence > 0.7) return 'bg-yellow-900/30';
+    return 'bg-red-900/30';
+  };
 
   return (
     <div className="h-full flex flex-col bg-obsidian-bg text-obsidian-text overflow-hidden">
-      {/* Top Command Center - Camera Pill Nav */}
-      <div className={`px-6 py-4 border-b transition-colors ${
+      {/* Header */}
+      <div className={`px-6 py-4 border-b transition-all glass-card ${
         motionAlert
-          ? 'border-obsidian-error bg-obsidian-error/10 animate-pulse'
-          : 'border-obsidian-border bg-obsidian-surface'
+          ? 'border-obsidian-error animate-pulse'
+          : 'border-obsidian-border'
       }`}>
         <div className="flex items-center justify-between gap-4">
-          {/* Left: Status + Camera Selector */}
-          <div className="flex items-center gap-4 flex-1">
-            <div className="flex items-center gap-2">
-              <Shield className={`w-6 h-6 ${isArmed ? 'text-obsidian-error' : 'text-obsidian-success'}`} />
-              <span className="text-xl font-bold">{isArmed ? 'ARMED' : 'DISARMED'}</span>
+          {/* Left: ARM/DISARM Button + Status */}
+          <div className="flex items-center gap-4">
+            <Button
+              onClick={() => handleArmToggle()}
+              className={`px-6 py-2 rounded-lg font-bold transition transform active:scale-95 ${
+                isArmed
+                  ? 'bg-obsidian-error hover:bg-red-700 text-white shadow-lg shadow-red-900/50'
+                  : 'bg-obsidian-success hover:bg-green-700 text-white shadow-lg shadow-green-900/50'
+              }`}
+            >
+              {isArmed ? '🔒 ARM' : '🔓 DISARM'}
+            </Button>
+
+            <div className="flex items-center gap-3 px-4 py-2 bg-obsidian-surface-hover rounded-lg border border-obsidian-border">
+              <Shield className={`w-5 h-5 ${isArmed ? 'text-obsidian-error' : 'text-obsidian-success'}`} />
+              <span className="font-semibold">{isArmed ? 'ARMED' : 'DISARMED'}</span>
             </div>
+          </div>
 
-            {wsConnected && (
-              <Badge variant="success" className="text-xs">
-                <span className="w-1.5 h-1.5 bg-obsidian-success rounded-full mr-1 animate-pulse"></span>
-                Live
-              </Badge>
-            )}
-
-            {motionAlert && (
-              <Badge variant="destructive" className="text-xs animate-pulse">
-                <AlertTriangle className="w-3 h-3 mr-1" />
-                Motion Detected
-              </Badge>
+          {/* Center: Last Motion Time */}
+          <div className="flex items-center gap-3 text-sm text-obsidian-text-muted">
+            {lastMotionEvent && lastMotionTime ? (
+              <>
+                <Circle className="w-2 h-2 fill-obsidian-error text-obsidian-error" />
+                <span>Last Motion: {formatDistanceToNow(lastMotionTime, { addSuffix: true })}</span>
+              </>
+            ) : (
+              <>
+                <CheckCircle2 className="w-4 h-4 text-obsidian-success" />
+                <span>All Clear</span>
+              </>
             )}
           </div>
 
-          {/* Center: Camera Pills */}
-          <div className="flex gap-2 flex-wrap justify-center">
-            {cameras.map((camera) => (
-              <button
-                key={camera.id}
-                onClick={() => selectCamera(camera.id)}
-                className={`px-4 py-2 rounded-full text-sm transition flex items-center gap-2 ${
-                  selectedCamera === camera.id
-                    ? 'bg-obsidian-accent text-white'
-                    : 'bg-obsidian-surface-hover text-obsidian-text hover:bg-obsidian-border'
-                }`}
-              >
-                <Camera className="w-4 h-4" />
-                {camera.name}
-              </button>
-            ))}
-          </div>
+          {/* Right: Connection Status */}
+          {wsConnected && (
+            <Badge variant="success" className="text-xs">
+              <span className="w-1.5 h-1.5 bg-obsidian-success rounded-full mr-1 animate-pulse"></span>
+              Live
+            </Badge>
+          )}
 
-          {/* Right: Large ARM/DISARM Button */}
-          <Button
-            onClick={() => handleArmToggle()}
-            className={`px-8 py-3 rounded-lg font-bold text-lg transition transform hover:scale-105 ${
-              isArmed
-                ? 'bg-obsidian-error hover:bg-red-700 text-white shadow-lg shadow-red-900/50'
-                : 'bg-obsidian-success hover:bg-green-700 text-white shadow-lg shadow-green-900/50'
-            }`}
-          >
-            {isArmed ? 'ARMED' : 'DISARM'}
-          </Button>
+          {motionAlert && (
+            <Badge variant="destructive" className="text-xs animate-pulse">
+              <AlertTriangle className="w-3 h-3 mr-1" />
+              Motion Detected
+            </Badge>
+          )}
         </div>
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-hidden flex gap-4">
-        {/* Center: Large Camera Feed */}
-        <div className="flex-1 flex flex-col bg-obsidian-bg p-4 overflow-hidden">
-          <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-lg overflow-hidden border-2 border-obsidian-border relative">
-            {selectedCameraObj && snapshot ? (
-              <>
-                <img
-                  src={snapshot}
-                  alt={selectedCameraObj.name}
-                  className={`w-full h-full object-contain transition-all ${
-                    motionAlert ? 'border-2 border-obsidian-error' : ''
-                  }`}
-                  style={{
-                    filter: motionAlert ? 'brightness(1.2)' : 'brightness(1)',
-                  }}
-                />
-                {snapshotLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                    <div className="animate-spin">
-                      <svg className="w-12 h-12 text-obsidian-accent" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="text-center">
-                <Camera className="w-16 h-16 text-obsidian-text-muted mx-auto mb-4 opacity-50" />
-                <p className="text-obsidian-text-muted">
-                  {selectedCamera ? 'Loading snapshot...' : 'Select a camera'}
-                </p>
-              </div>
-            )}
-          </div>
+      <div className="flex-1 overflow-hidden flex flex-col gap-4 p-4">
+        {/* Camera Grid (Top 2/3) */}
+        <div className="flex-1 overflow-hidden">
+          <div className="grid grid-cols-2 gap-4 h-full auto-rows-max">
+            {cameras.map((camera) => {
+              const snapshot = cameraSnapshots.get(camera.id);
+              const lastMotion = events
+                .filter((e) => e.camera_id === camera.id)
+                .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
 
-          {/* Camera Info */}
-          {selectedCameraObj && (
-            <div className="mt-2 text-center text-sm text-obsidian-text-muted">
-              {selectedCameraObj.name} • {selectedCameraObj.status || 'unknown'}
-            </div>
-          )}
+              return (
+                <div
+                  key={camera.id}
+                  onClick={() => setFullscreenCameraId(camera.id)}
+                  className="group cursor-pointer rounded-xl overflow-hidden glass-card bg-black hover:shadow-lg hover:shadow-obsidian-accent/20 relative h-64 flex flex-col"
+                >
+                  {snapshot ? (
+                    <>
+                      <img
+                        src={snapshot.snapshot}
+                        alt={camera.name}
+                        className="w-full h-full object-cover group-hover:brightness-110 transition-all"
+                      />
+                      {/* Glass overlay with info */}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
+                        <h3 className="font-semibold text-white">{camera.name}</h3>
+                        {lastMotion && (
+                          <p className="text-xs text-gray-300 mt-1">
+                            🔴 Motion: {formatDistanceToNow(new Date(lastMotion.timestamp), { addSuffix: true })}
+                          </p>
+                        )}
+                      </div>
+                      {/* Zoom indicator */}
+                      <div className="absolute top-2 right-2 bg-black/50 backdrop-blur p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                        <ZoomIn className="w-4 h-4 text-white" />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-obsidian-surface">
+                      <Camera className="w-12 h-12 text-obsidian-text-muted opacity-50" />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
 
-        {/* Right: Event Timeline */}
-        <div className="w-80 border-l border-obsidian-border bg-obsidian-surface flex flex-col overflow-hidden">
+        {/* Motion Timeline (Bottom 1/3) */}
+        <div className="h-1/3 glass-card rounded-xl overflow-hidden flex flex-col">
           {/* Timeline Header */}
-          <div className="p-4 border-b border-obsidian-border">
+          <div className="px-4 py-3 border-b border-obsidian-border flex items-center justify-between">
             <h3 className="font-semibold flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-obsidian-error" />
-              Motion Events
+              Motion Timeline
             </h3>
-            <p className="text-xs text-obsidian-text-muted mt-1">{events.length} total • {highConfidenceEvents.length} high confidence</p>
+            <span className="text-xs text-obsidian-text-muted">{events.length} events</span>
           </div>
 
-          {/* Events Timeline Feed */}
+          {/* Timeline Events */}
           <ScrollArea className="flex-1">
-            <div className="p-4 space-y-3">
-              {recentEvents.length === 0 ? (
-                <div className="text-center text-obsidian-text-muted text-sm py-8">
+            <div className="p-3 space-y-2">
+              {events.length === 0 ? (
+                <div className="text-center text-obsidian-text-muted text-sm py-4">
                   No motion events
                 </div>
               ) : (
-                recentEvents.map((event) => (
+                events.map((event, index) => (
                   <div
                     key={event.id}
-                    className={`p-3 rounded-lg border transition ${
-                      event.confidence > 0.8
-                        ? 'bg-obsidian-error/10 border-obsidian-error/50'
-                        : event.confidence > 0.5
-                        ? 'bg-obsidian-warning/10 border-obsidian-warning/50'
-                        : 'bg-obsidian-surface-hover border-obsidian-border'
-                    }`}
+                    onClick={() => setSelectedEventForModal(event)}
+                    className={`p-3 rounded-lg border transition cursor-pointer glass-card group ${
+                      getConfidenceBgColor(event.confidence)} border-l-4 border-l-obsidian-error`}
                   >
-                    <div className="flex gap-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        {/* Time and Icon */}
+                        <div className="flex flex-col items-center gap-1 flex-shrink-0">
+                          <span className="text-xs font-mono font-semibold">
+                            {format(new Date(event.timestamp), 'HH:mm')}
+                          </span>
+                          <Circle className="w-2.5 h-2.5 fill-obsidian-error text-obsidian-error" />
+                        </div>
+
+                        {/* Event Details */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-medium text-obsidian-text truncate">
+                              {event.camera_id} Motion
+                            </span>
+                            <Badge
+                              variant="secondary"
+                              className={`text-xs flex-shrink-0 ${getConfidenceBgColor(
+                                event.confidence
+                              )} text-white border-0`}
+                            >
+                              {(event.confidence * 100).toFixed(0)}%
+                            </Badge>
+                          </div>
+                          {event.narration && (
+                            <p className="text-xs text-obsidian-text-muted mt-1 truncate">
+                              {event.narration}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Thumbnail */}
                       {event.thumbnail_url && (
                         <img
                           src={event.thumbnail_url}
-                          alt="Event thumbnail"
-                          className="w-12 h-12 rounded object-cover flex-shrink-0"
+                          alt="Event"
+                          className="w-12 h-12 rounded-lg object-cover flex-shrink-0 group-hover:scale-110 transition-transform"
                         />
                       )}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium text-obsidian-text truncate text-sm">
-                            {event.camera_id}
-                          </span>
-                          <Badge
-                            variant={
-                              event.confidence > 0.8
-                                ? 'destructive'
-                                : event.confidence > 0.5
-                                ? 'warning'
-                                : 'secondary'
-                            }
-                            className="text-xs flex-shrink-0"
-                          >
-                            {(event.confidence * 100).toFixed(0)}%
-                          </Badge>
-                        </div>
-                        {event.narration && (
-                          <p className="text-xs text-obsidian-text-muted mt-1">{event.narration}</p>
-                        )}
-                        <div className="text-xs text-obsidian-text-muted mt-1">
-                          {formatDistanceToNow(new Date(event.timestamp), { addSuffix: true })}
-                        </div>
-                      </div>
+                    </div>
+
+                    {/* Confidence Bar */}
+                    <div className="mt-2 h-1 bg-obsidian-border rounded-full overflow-hidden">
+                      <div
+                        className={`h-full ${getConfidenceColor(event.confidence)}`}
+                        style={{ width: `${event.confidence * 100}%` }}
+                      />
                     </div>
                   </div>
                 ))
@@ -365,6 +421,122 @@ export const SecurityPanel: React.FC = () => {
         </div>
       </div>
 
+      {/* Fullscreen Camera Modal */}
+      {fullscreenCameraId && (
+        <Dialog open={!!fullscreenCameraId} onOpenChange={(open) => !open && setFullscreenCameraId(null)}>
+          <DialogContent className="max-w-4xl bg-black border-obsidian-border p-0">
+            <div className="relative w-full h-screen bg-black overflow-hidden">
+              {/* Close Button */}
+              <button
+                onClick={() => setFullscreenCameraId(null)}
+                className="absolute top-4 right-4 z-50 p-2 bg-black/50 hover:bg-black/70 rounded-lg transition-all"
+              >
+                <X className="w-5 h-5 text-white" />
+              </button>
+
+              {/* Refresh Button */}
+              <button
+                onClick={() => loadCameraSnapshot(fullscreenCameraId)}
+                className="absolute top-4 left-4 z-50 p-2 bg-black/50 hover:bg-black/70 rounded-lg transition-all"
+              >
+                <RefreshCw className="w-5 h-5 text-white" />
+              </button>
+
+              {/* Camera Snapshot */}
+              {cameraSnapshots.get(fullscreenCameraId) && (
+                <>
+                  <img
+                    src={cameraSnapshots.get(fullscreenCameraId)!.snapshot}
+                    alt="Fullscreen"
+                    className="w-full h-full object-contain"
+                  />
+                  <p className="absolute bottom-4 left-4 text-xs text-gray-400">
+                    {cameras.find((c) => c.id === fullscreenCameraId)?.name}
+                  </p>
+                </>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Event Thumbnail Modal */}
+      {selectedEventForModal && (
+        <Dialog open={!!selectedEventForModal} onOpenChange={(open) => !open && setSelectedEventForModal(null)}>
+          <DialogContent className="max-w-2xl bg-obsidian-surface border-obsidian-border max-h-[90vh] overflow-y-auto">
+            <div className="grid grid-cols-2 gap-4">
+              {/* Thumbnail */}
+              {selectedEventForModal.thumbnail_url && (
+                <div className="rounded-lg overflow-hidden border border-obsidian-border bg-black">
+                  <img
+                    src={selectedEventForModal.thumbnail_url}
+                    alt="Event thumbnail"
+                    className="w-full h-auto object-contain"
+                  />
+                </div>
+              )}
+
+              {/* Event Details */}
+              <div className="space-y-4">
+                <div>
+                  <h2 className="text-lg font-bold">{selectedEventForModal.camera_id}</h2>
+                  <p className="text-sm text-obsidian-text-muted mt-1">
+                    {format(new Date(selectedEventForModal.timestamp), 'PPpp')}
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-xs text-obsidian-text-muted">Confidence</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <div className="flex-1 h-2 bg-obsidian-border rounded-full overflow-hidden">
+                        <div
+                          className={`h-full ${getConfidenceColor(selectedEventForModal.confidence)}`}
+                          style={{ width: `${selectedEventForModal.confidence * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-sm font-semibold">
+                        {(selectedEventForModal.confidence * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {selectedEventForModal.narration && (
+                  <div>
+                    <p className="text-xs text-obsidian-text-muted mb-1">Description</p>
+                    <p className="text-sm text-obsidian-text">{selectedEventForModal.narration}</p>
+                  </div>
+                )}
+
+                {/* Nearby Events */}
+                <div>
+                  <p className="text-xs text-obsidian-text-muted mb-2">Nearby Events</p>
+                  <div className="space-y-2 max-h-32 overflow-y-auto">
+                    {events
+                      .filter(
+                        (e) =>
+                          e.camera_id === selectedEventForModal.camera_id &&
+                          e.id !== selectedEventForModal.id &&
+                          Math.abs(
+                            new Date(e.timestamp).getTime() - new Date(selectedEventForModal.timestamp).getTime()
+                          ) < 5 * 60 * 1000 // Within 5 minutes
+                      )
+                      .slice(0, 3)
+                      .map((e) => (
+                        <div key={e.id} className="text-xs text-obsidian-text-muted py-1 border-b border-obsidian-border">
+                          {format(new Date(e.timestamp), 'HH:mm:ss')} • {(e.confidence * 100).toFixed(0)}%
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Error Bar */}
       {error && (
         <div className="px-6 py-3 bg-obsidian-error/20 text-red-300 text-sm border-t border-obsidian-error/50 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />

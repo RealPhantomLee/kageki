@@ -3,6 +3,7 @@ Infrastructure node management and monitoring.
 Provides Docker, k3s, and system metrics for the Phantom Portal infrastructure panel.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -35,12 +36,15 @@ async def get_containers():
     try:
         client = docker.from_env()
         containers = []
-        for c in client.containers.list():
+        for c in client.containers.list(all=True):
+            # Determine status: running or exited
+            container_status = "running" if c.status.startswith("Up") else "exited"
             containers.append({
                 "id": c.id[:12],
                 "name": c.name,
                 "image": c.image.tags[0] if c.image.tags else c.image.id[:12],
-                "status": c.status,
+                "status": container_status,
+                "state": c.status,
                 "ports": c.ports,
                 "created": c.attrs['Created'],
             })
@@ -54,7 +58,8 @@ async def get_containers():
 async def get_metrics():
     """System metrics: CPU, RAM, disk for local cyberdeck."""
     try:
-        cpu_percent = psutil.cpu_percent(interval=1)
+        loop = asyncio.get_event_loop()
+        cpu_percent = await loop.run_in_executor(None, psutil.cpu_percent, None)
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
 
@@ -158,3 +163,51 @@ async def list_nodes():
         raise HTTPException(status_code=500, detail="Failed to fetch nodes")
     finally:
         await db.close()
+
+
+@router.post("/containers/{name}/start")
+async def start_container(name: str):
+    """Start a Docker container."""
+    try:
+        client = docker.from_env()
+        container = client.containers.get(name)
+        container.start()
+        log.info(f"Started container: {name}")
+        return {"status": "success", "state": "running"}
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail=f"Container '{name}' not found")
+    except Exception as e:
+        log.error(f"Error starting container {name}: {e}")
+        raise HTTPException(status_code=503, detail=f"Failed to start container: {str(e)}")
+
+
+@router.post("/containers/{name}/stop")
+async def stop_container(name: str):
+    """Stop a Docker container."""
+    try:
+        client = docker.from_env()
+        container = client.containers.get(name)
+        container.stop()
+        log.info(f"Stopped container: {name}")
+        return {"status": "success", "state": "exited"}
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail=f"Container '{name}' not found")
+    except Exception as e:
+        log.error(f"Error stopping container {name}: {e}")
+        raise HTTPException(status_code=503, detail=f"Failed to stop container: {str(e)}")
+
+
+@router.post("/containers/{name}/restart")
+async def restart_container(name: str):
+    """Restart a Docker container."""
+    try:
+        client = docker.from_env()
+        container = client.containers.get(name)
+        container.restart()
+        log.info(f"Restarted container: {name}")
+        return {"status": "success", "state": "running"}
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail=f"Container '{name}' not found")
+    except Exception as e:
+        log.error(f"Error restarting container {name}: {e}")
+        raise HTTPException(status_code=503, detail=f"Failed to restart container: {str(e)}")

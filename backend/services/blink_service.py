@@ -1,6 +1,8 @@
 import logging
+import os
 from typing import Optional
 from blinkpy.blinkpy import Blink
+from blinkpy.auth import Auth
 from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -31,10 +33,13 @@ class BlinkService:
             if self.blinkpy is None:
                 self.blinkpy = Blink()
 
-            await self.blinkpy.auth.startup(
-                username=self.settings.blink.username,
-                password=self.settings.blink.password,
-            )
+            auth_data = {
+                "username": self.settings.blink.username,
+                "password": self.settings.blink.password,
+                "client_id": os.getenv("BLINK_CLIENT_ID", ""),
+            }
+            self.blinkpy.auth = Auth(auth_data)
+            await self.blinkpy.start()
 
             # Load networks and sync modules
             await self.blinkpy.networks.get_networks()

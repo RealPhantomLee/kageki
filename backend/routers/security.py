@@ -1,8 +1,10 @@
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.db.connection import get_connection
@@ -116,3 +118,19 @@ async def log_motion_event(
     except Exception as e:
         logger.error(f"Error logging event: {e}")
         raise HTTPException(status_code=500, detail="Database error")
+
+
+@router.get("/thumbnails/{filename}")
+async def get_thumbnail(filename: str):
+    """Serve thumbnail images from motion events."""
+    thumbnails_dir = Path("/home/jolly/Projects/phantom/data/thumbnails")
+    file_path = thumbnails_dir / filename
+
+    # Security: prevent directory traversal
+    if not str(file_path.resolve()).startswith(str(thumbnails_dir.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+    return FileResponse(file_path, media_type="image/jpeg")

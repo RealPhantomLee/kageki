@@ -3,7 +3,34 @@ import axios from 'axios';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Card } from '../components/ui/card';
-import { Cpu, HardDrive, Zap, Container, AlertCircle } from 'lucide-react';
+import { Cpu, HardDrive, Zap, Container, AlertCircle, ExternalLink, X } from 'lucide-react';
+
+interface ServiceLink {
+  port: number;
+  label: string;
+}
+
+interface ModalContainer {
+  id: string;
+  name: string;
+  status: string;
+  image: string;
+  created?: string;
+  ports?: string[];
+  env?: string[];
+  volumes?: string[];
+  logs?: string[];
+}
+
+const SERVICE_LINKS: Record<string, ServiceLink> = {
+  'grafana': { port: 3030, label: 'Grafana' },
+  'gitea': { port: 3003, label: 'Gitea' },
+  'prometheus': { port: 9091, label: 'Prometheus' },
+  'node-red': { port: 1880, label: 'Node Red' },
+  'portainer': { port: 9000, label: 'Portainer' },
+  'pihole': { port: 80, label: 'Pi-hole' },
+  'home-assistant': { port: 8123, label: 'Home Assistant' },
+};
 
 export const InfraPanel: React.FC = () => {
   const [containers, setContainers] = useState<any[]>([]);
@@ -11,26 +38,29 @@ export const InfraPanel: React.FC = () => {
   const [k3sNodes, setK3sNodes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [controlError, setControlError] = useState('');
+  const [selectedContainer, setSelectedContainer] = useState<ModalContainer | null>(null);
+  const [controllingContainer, setControllingContainer] = useState<string | null>(null);
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const [containerRes, metricsRes, k3sRes] = await Promise.all([
+        axios.get('/api/infra/containers'),
+        axios.get('/api/infra/metrics'),
+        axios.get('/api/infra/k3s/nodes'),
+      ]);
+      setContainers(containerRes.data.containers || []);
+      setMetrics(metricsRes.data);
+      setK3sNodes(k3sRes.data.nodes || []);
+    } catch (err: any) {
+      setError(err.response?.data?.error || String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const [containerRes, metricsRes, k3sRes] = await Promise.all([
-          axios.get('/api/infra/containers'),
-          axios.get('/api/infra/metrics'),
-          axios.get('/api/infra/k3s/nodes'),
-        ]);
-        setContainers(containerRes.data.containers || []);
-        setMetrics(metricsRes.data);
-        setK3sNodes(k3sRes.data.nodes || []);
-      } catch (err: any) {
-        setError(err.response?.data?.error || String(err));
-      } finally {
-        setLoading(false);
-      }
-    };
-
     // Initial fetch
     fetchData();
 
@@ -39,18 +69,62 @@ export const InfraPanel: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  const handleContainerControl = async (containerName: string, action: 'start' | 'stop' | 'restart') => {
+    try {
+      setControllingContainer(containerName);
+      setControlError('');
+      await axios.post(`/api/infra/containers/${containerName}/${action}`);
+      // Refresh container list
+      await fetchData();
+    } catch (err: any) {
+      setControlError(`Failed to ${action} ${containerName}: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setControllingContainer(null);
+    }
+  };
+
+  const isButtonDisabled = (status: string, action: string): boolean => {
+    const isRunning = status.includes('running');
+    if (action === 'start') return isRunning;
+    if (action === 'stop') return !isRunning;
+    return false; // restart always enabled
+  };
+
+  const openContainerDetails = (c: any) => {
+    setSelectedContainer({
+      id: c.id,
+      name: c.name,
+      status: c.status,
+      image: c.image,
+      created: c.created,
+      ports: c.ports || [],
+      env: (c.env || []).slice(0, 5),
+      volumes: c.volumes || [],
+      logs: c.logs || [],
+    });
+  };
+
   if (loading && !metrics) return <div className="p-4 text-obsidian-text">Loading...</div>;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-obsidian-bg">
       {/* Header */}
-      <div className="p-4 border-b border-obsidian-border">
+      <div className="glass-card p-4 border-b border-obsidian-border">
         <h2 className="text-xl font-bold text-obsidian-text">Infrastructure</h2>
       </div>
 
       {error && (
         <div className="p-4 bg-obsidian-error/10 border border-obsidian-error text-obsidian-error">
           {error}
+        </div>
+      )}
+
+      {controlError && (
+        <div className="p-4 bg-obsidian-error/10 border border-obsidian-error text-obsidian-error flex justify-between items-center">
+          <span>{controlError}</span>
+          <button onClick={() => setControlError('')} className="text-obsidian-error hover:text-obsidian-error/80">
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
@@ -104,31 +178,91 @@ export const InfraPanel: React.FC = () => {
       {/* Containers Section */}
       <div className="flex-1 flex flex-col overflow-hidden p-4">
         <h3 className="font-semibold text-obsidian-text mb-3">Containers ({containers.length})</h3>
-        <div className="flex-1 overflow-y-auto space-y-2">
-          {containers.map((c) => (
-            <div key={c.id} className="glass-card p-3 rounded border border-obsidian-border text-sm">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 flex-1">
-                  <Container className="w-4 h-4 text-obsidian-accent" />
-                  <span className="font-mono text-obsidian-text">{c.name}</span>
-                  {c.status.includes('running') ? (
-                    <Badge className="bg-obsidian-success text-xs">Running</Badge>
-                  ) : (
-                    <Badge className="bg-obsidian-error text-xs">Stopped</Badge>
+        <div className="flex-1 overflow-y-auto h-full space-y-2">
+          {containers.map((c) => {
+            const isRunning = c.status.includes('running');
+            const serviceKey = Object.keys(SERVICE_LINKS).find(key => c.name.includes(key));
+            const serviceLink = serviceKey ? SERVICE_LINKS[serviceKey] : null;
+
+            return (
+              <div
+                key={c.id}
+                className={`glass-card p-3 rounded border border-obsidian-border text-sm transition-all hover:shadow-lg hover:shadow-obsidian-accent/20 cursor-pointer ${
+                  !isRunning ? 'opacity-60' : ''
+                }`}
+                onClick={() => openContainerDetails(c)}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 flex-1">
+                    <div className={`w-2 h-2 rounded-full transition-colors ${isRunning ? 'bg-obsidian-success' : 'bg-obsidian-error'}`} />
+                    <span className="font-mono text-obsidian-text">{c.name}</span>
+                    {isRunning ? (
+                      <Badge className="bg-obsidian-success text-xs">Running</Badge>
+                    ) : (
+                      <Badge className="bg-obsidian-error text-xs">Stopped</Badge>
+                    )}
+                  </div>
+                </div>
+
+                <div className="text-xs text-obsidian-text-muted mb-2">{c.image}</div>
+
+                {/* Control Buttons and Service Links */}
+                <div className="flex gap-2 flex-wrap items-center">
+                  <Button
+                    size="sm"
+                    variant={isRunning ? 'outline' : 'default'}
+                    onClick={(e) => { e.stopPropagation(); handleContainerControl(c.name, 'start'); }}
+                    disabled={isButtonDisabled(c.status, 'start') || controllingContainer === c.name}
+                    className="text-xs"
+                  >
+                    {controllingContainer === c.name ? '...' : 'Start'}
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant={isRunning ? 'default' : 'outline'}
+                    onClick={(e) => { e.stopPropagation(); handleContainerControl(c.name, 'stop'); }}
+                    disabled={isButtonDisabled(c.status, 'stop') || controllingContainer === c.name}
+                    className="text-xs"
+                  >
+                    {controllingContainer === c.name ? '...' : 'Stop'}
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={(e) => { e.stopPropagation(); handleContainerControl(c.name, 'restart'); }}
+                    disabled={controllingContainer === c.name}
+                    className="text-xs"
+                  >
+                    {controllingContainer === c.name ? '...' : 'Restart'}
+                  </Button>
+
+                  {serviceLink && isRunning && (
+                    <a
+                      href={`http://100.121.96.1:${serviceLink.port}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Button size="sm" variant="outline" className="text-xs gap-1">
+                        <ExternalLink className="w-3 h-3" />
+                        {serviceLink.label}
+                      </Button>
+                    </a>
                   )}
                 </div>
               </div>
-              <div className="text-xs text-obsidian-text-muted mt-1">{c.image}</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
       {/* k3s Nodes Section */}
       {k3sNodes.length > 0 && (
-        <div className="p-4 border-t border-obsidian-border">
+        <div className="p-4 border-t border-obsidian-border flex-1 flex flex-col overflow-hidden">
           <h3 className="font-semibold text-obsidian-text mb-3">K3s Nodes</h3>
-          <div className="space-y-2">
+          <div className="overflow-y-auto h-full space-y-2">
             {k3sNodes.map((node, idx) => (
               <div key={idx} className="glass-card p-2 rounded border border-obsidian-border text-xs">
                 <div className="flex justify-between">
@@ -137,6 +271,125 @@ export const InfraPanel: React.FC = () => {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Container Details Modal */}
+      {selectedContainer && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onClick={() => setSelectedContainer(null)}
+        >
+          <div
+            className="bg-obsidian-bg border border-obsidian-border rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="sticky top-0 flex items-center justify-between p-4 border-b border-obsidian-border bg-obsidian-bg/95 backdrop-blur">
+              <div className="flex items-center gap-3">
+                <div className={`w-3 h-3 rounded-full ${selectedContainer.status.includes('running') ? 'bg-obsidian-success' : 'bg-obsidian-error'}`} />
+                <h2 className="text-lg font-bold text-obsidian-text">{selectedContainer.name}</h2>
+              </div>
+              <button
+                onClick={() => setSelectedContainer(null)}
+                className="text-obsidian-text-muted hover:text-obsidian-text transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-4 space-y-4">
+              {/* Status & Image */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <h3 className="text-xs font-semibold text-obsidian-text-muted mb-1">Status</h3>
+                  <Badge className={selectedContainer.status.includes('running') ? 'bg-obsidian-success' : 'bg-obsidian-error'}>
+                    {selectedContainer.status.includes('running') ? 'Running' : 'Stopped'}
+                  </Badge>
+                </div>
+                <div>
+                  <h3 className="text-xs font-semibold text-obsidian-text-muted mb-1">Created</h3>
+                  <p className="text-sm text-obsidian-text font-mono">{selectedContainer.created || 'N/A'}</p>
+                </div>
+              </div>
+
+              {/* Image */}
+              <div>
+                <h3 className="text-xs font-semibold text-obsidian-text-muted mb-1">Image</h3>
+                <p className="text-sm text-obsidian-text font-mono break-all">{selectedContainer.image}</p>
+              </div>
+
+              {/* Container ID */}
+              <div>
+                <h3 className="text-xs font-semibold text-obsidian-text-muted mb-1">Container ID</h3>
+                <p className="text-sm text-obsidian-text font-mono">{selectedContainer.id.substring(0, 12)}</p>
+              </div>
+
+              {/* Ports */}
+              {selectedContainer.ports && selectedContainer.ports.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-obsidian-text-muted mb-1">Port Mappings</h3>
+                  <div className="space-y-1">
+                    {selectedContainer.ports.map((port, idx) => (
+                      <p key={idx} className="text-sm text-obsidian-text font-mono">
+                        {port}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Environment Variables */}
+              {selectedContainer.env && selectedContainer.env.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-obsidian-text-muted mb-1">
+                    Environment Variables ({selectedContainer.env.length})
+                  </h3>
+                  <div className="bg-obsidian-bg-secondary rounded p-2 max-h-32 overflow-y-auto space-y-1">
+                    {selectedContainer.env.map((e, idx) => (
+                      <p key={idx} className="text-xs text-obsidian-text font-mono break-all">
+                        {e}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Volumes */}
+              {selectedContainer.volumes && selectedContainer.volumes.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-obsidian-text-muted mb-1">Volumes</h3>
+                  <div className="space-y-1">
+                    {selectedContainer.volumes.map((vol, idx) => (
+                      <p key={idx} className="text-sm text-obsidian-text font-mono break-all">
+                        {vol}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Logs */}
+              {selectedContainer.logs && selectedContainer.logs.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-semibold text-obsidian-text-muted mb-1">Recent Logs</h3>
+                  <div className="bg-obsidian-bg-secondary rounded p-2 max-h-40 overflow-y-auto">
+                    <pre className="text-xs text-obsidian-text-muted font-mono whitespace-pre-wrap break-words">
+                      {selectedContainer.logs.join('\n')}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="sticky bottom-0 flex gap-2 p-4 border-t border-obsidian-border bg-obsidian-bg/95 backdrop-blur">
+              <Button onClick={() => setSelectedContainer(null)} variant="outline" className="flex-1">
+                Close
+              </Button>
+            </div>
           </div>
         </div>
       )}

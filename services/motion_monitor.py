@@ -46,7 +46,7 @@ class MotionMonitor:
         self.blink = Blink(session=self.session)
 
         if BLINK_CREDS_PATH.exists():
-            credentials = json_load(str(BLINK_CREDS_PATH))
+            credentials = await json_load(str(BLINK_CREDS_PATH))
         else:
             credentials = {
                 "username": settings.blink.username,

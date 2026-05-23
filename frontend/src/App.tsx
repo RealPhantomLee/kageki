@@ -27,6 +27,8 @@ export const App: React.FC = () => {
     nodeCount: 0,
     mqtt: false,
   });
+  const [touchStartX, setTouchStartX] = useState(0);
+  const [touchEndX, setTouchEndX] = useState(0);
 
   // Handle window resize for responsive layout
   useEffect(() => {
@@ -37,6 +39,59 @@ export const App: React.FC = () => {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  // Handle keyboard shortcuts (desktop)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !isMobile) {
+        const tabMap: Record<string, "home" | "notes" | "security" | "infrastructure"> = {
+          '1': 'home',
+          '2': 'notes',
+          '3': 'security',
+          '4': 'infrastructure',
+        };
+
+        if (tabMap[e.key]) {
+          e.preventDefault();
+          setActiveTab(tabMap[e.key]);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isMobile, setActiveTab]);
+
+  // Handle swipe navigation (mobile)
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setTouchStartX(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    setTouchEndX(e.changedTouches[0].clientX);
+
+    const tabOrder: ("home" | "notes" | "security" | "infrastructure")[] = [
+      "home",
+      "notes",
+      "security",
+      "infrastructure",
+    ];
+
+    const currentIndex = tabOrder.indexOf(activeTab as any);
+    const swipeDistance = touchStartX - touchEndX;
+
+    // Swipe left (move to next tab)
+    if (swipeDistance > 50 && currentIndex < tabOrder.length - 1) {
+      setActiveTab(tabOrder[currentIndex + 1]);
+      setMenuOpen(false);
+    }
+
+    // Swipe right (move to previous tab)
+    if (swipeDistance < -50 && currentIndex > 0) {
+      setActiveTab(tabOrder[currentIndex - 1]);
+      setMenuOpen(false);
+    }
+  };
 
   // Handle PWA install prompt
   useEffect(() => {
@@ -154,9 +209,13 @@ export const App: React.FC = () => {
 
   if (isMobile) {
     return (
-      <div className="flex flex-col h-screen bg-obsidian-bg text-obsidian-text">
+      <div
+        className="flex flex-col h-screen bg-obsidian-bg text-obsidian-text"
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+      >
         {/* Mobile Header */}
-        <div className="bg-obsidian-surface border-b border-obsidian-border px-4 py-3 flex items-center justify-between">
+        <div className="glass-card px-4 py-3 flex items-center justify-between">
           <h1 className="text-lg font-bold">Phantom</h1>
           <button
             onClick={() => setMenuOpen(!menuOpen)}
@@ -208,13 +267,13 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* Main Content */}
-        <div className="flex-1 overflow-hidden p-4">
+        {/* Main Content - Full Width on Mobile */}
+        <div className="flex-1 overflow-hidden">
           {renderPanel()}
         </div>
 
-        {/* Mobile Footer */}
-        <div className="bg-obsidian-surface border-t border-obsidian-border grid grid-cols-4 gap-1 p-2">
+        {/* Mobile Footer - Always Visible */}
+        <div className="glass-card border-t border-obsidian-border grid grid-cols-4 gap-1 p-2">
           {navItems.map(({ id, label, icon }) => (
             <button
               key={id}
@@ -238,7 +297,7 @@ export const App: React.FC = () => {
   return (
     <div className="flex h-screen bg-obsidian-bg text-obsidian-text">
       {/* Left Icon Sidebar - Narrow */}
-      <div className="w-20 bg-obsidian-surface border-r border-obsidian-border flex flex-col items-center py-4 gap-4">
+      <div className="w-20 glass-card border-r border-obsidian-border flex flex-col items-center py-4 gap-4">
         {/* Logo */}
         <div className="w-12 h-12 rounded-lg bg-obsidian-accent flex items-center justify-center text-white font-bold text-lg mb-2">
           P
@@ -289,7 +348,7 @@ export const App: React.FC = () => {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top Status Bar */}
-        <div className="bg-obsidian-surface border-b border-obsidian-border px-6 py-3 flex items-center justify-between">
+        <div className="glass-card px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <h1 className="text-lg font-bold text-obsidian-text">Phantom Portal</h1>
             <div className="text-sm text-obsidian-text-muted">
@@ -325,7 +384,7 @@ export const App: React.FC = () => {
         </div>
 
         {/* Bottom Status Bar - Real Status Info */}
-        <div className="bg-obsidian-surface border-t border-obsidian-border px-6 py-2 flex items-center justify-between text-xs text-obsidian-text-muted">
+        <div className="glass-card px-6 py-2 flex items-center justify-between text-xs text-obsidian-text-muted">
           <div className="flex gap-6">
             <div className="flex items-center gap-1">
               <span className={`w-1.5 h-1.5 rounded-full ${health.api ? 'bg-obsidian-success' : 'bg-obsidian-error'}`}></span>

@@ -8,36 +8,123 @@
   box-sizing: border-box;
 }
 
-html,
+html {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: 0.3px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 body {
   height: 100%;
   width: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu",
-    "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  background: linear-gradient(180deg, #050510 0%, #0a0a1a 50%, #050510 100%);
+  background-attachment: fixed;
+  position: relative;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Animated data stream background overlay */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background:
+    linear-gradient(90deg, transparent 0%, rgba(124, 58, 237, 0.03) 50%, transparent 100%),
+    radial-gradient(circle at 20% 50%, rgba(59, 130, 246, 0.05) 0%, transparent 50%),
+    radial-gradient(circle at 80% 80%, rgba(220, 38, 38, 0.03) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+  animation: dataStreamFlow 20s linear infinite;
+}
+
+/* Animated scanline effect */
+body::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(124, 58, 237, 0.03) 0px,
+      transparent 1px,
+      transparent 2px,
+      rgba(59, 130, 246, 0.02) 3px
+    );
+  pointer-events: none;
+  z-index: 0;
+  animation: scanlineScroll 8s linear infinite;
 }
 
 #root {
   height: 100%;
   width: 100%;
+  position: relative;
+  z-index: 1;
 }
 
-/* Obsidian Dark Theme */
+/* Obsidian Dark Theme - Dark Glass / Sci-Fi Dashboard */
 :root {
   color-scheme: dark;
-  /* Obsidian color palette */
-  --obsidian-bg: #0d0d0d;
-  --obsidian-surface: #1a1a1a;
-  --obsidian-surface-hover: #252525;
-  --obsidian-border: #2d2d2d;
+  /* Deep Space Color Palette */
+  --deep-space: #050510;
+  --obsidian-bg: #050510;
+  --obsidian-surface: #0f0f1e;
+  --obsidian-surface-hover: #1a1a2e;
+  --obsidian-border: #2d2d44;
   --obsidian-text: #e0e0e0;
   --obsidian-text-muted: #8b8b8b;
+  /* Primary + Secondary Accents */
   --obsidian-accent: #7c3aed;
   --obsidian-accent-light: #a855f7;
-  --obsidian-success: #0fb981;
-  --obsidian-warning: #f39c12;
-  --obsidian-error: #e74c3c;
+  --obsidian-accent-blue: #3b82f6;
+  /* Alert + Status Colors */
+  --obsidian-danger: #dc2626;
+  --obsidian-success: #10b981;
+  --obsidian-warning: #f59e0b;
+  --obsidian-error: #dc2626;
+}
+
+/* Animation Keyframes */
+@keyframes dataStreamFlow {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+@keyframes scanlineScroll {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(10px); }
+}
+
+@keyframes statusGlow {
+  0%, 100% { box-shadow: 0 0 8px currentColor, 0 0 16px rgba(124, 58, 237, 0.5); }
+  50% { box-shadow: 0 0 16px currentColor, 0 0 32px rgba(124, 58, 237, 0.7); }
+}
+
+@keyframes panelSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes statusPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
 }
 
 /* Scrollbar styling */
@@ -72,12 +159,40 @@ textarea:focus {
   outline: none;
 }
 
-/* Button reset */
+/* Button Reset + Enhancement */
 button {
-  background: none;
-  border: none;
   cursor: pointer;
-  font-family: inherit;
+  font-family: 'Inter', inherit;
+  transition: all 0.2s ease;
+}
+
+button:not([variant="outline"]):not([class*="bg-"]) {
+  background: linear-gradient(135deg, #7c3aed 0%, #3b82f6 100%);
+  border: 1px solid #a855f7;
+  color: white;
+  border-radius: 6px;
+  padding: 8px 16px;
+}
+
+button:not([variant="outline"]):not([class*="bg-"]):hover {
+  background: linear-gradient(135deg, #a855f7 0%, #60a5fa 100%);
+  box-shadow: 0 8px 24px rgba(124, 58, 237, 0.3);
+  transform: translateY(-2px);
+}
+
+button:not([variant="outline"]):not([class*="bg-"]):active {
+  transform: translateY(0);
+}
+
+button[variant="outline"] {
+  background: transparent;
+  border: 1px solid rgba(124, 58, 237, 0.5);
+  color: #e0e0e0;
+}
+
+button[variant="outline"]:hover {
+  background: rgba(124, 58, 237, 0.1);
+  border-color: #7c3aed;
 }
 
 /* Smooth animations */
@@ -94,12 +209,65 @@ button {
   }
 }
 
-/* Glass Morphism */
+/* Glass Morphism - Dark Glass with Gradient Borders */
 .glass-card {
-  backdrop-filter: blur(12px);
-  background: rgba(26, 26, 26, 0.75);
-  border: 1px solid rgba(124, 58, 237, 0.15);
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  background: rgba(15, 15, 30, 0.4);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid;
+  border-image: linear-gradient(135deg, #7c3aed 0%, #3b82f6 50%, transparent 100%) 1;
+  box-shadow:
+    0 8px 32px rgba(124, 58, 237, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transition: all 0.3s ease;
+}
+
+.glass-card:hover {
+  background: rgba(15, 15, 30, 0.6);
+  border-image: linear-gradient(135deg, #a855f7 0%, #60a5fa 50%, #dc2626 100%) 1;
+  box-shadow:
+    0 16px 48px rgba(124, 58, 237, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+/* Status Indicator Styling */
+.status-dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: statusGlow 2s ease-in-out infinite;
+}
+
+.status-dot.active {
+  background-color: #10b981;
+  box-shadow: 0 0 8px #10b981, 0 0 16px rgba(16, 185, 129, 0.5);
+}
+
+.status-dot.inactive {
+  background-color: #dc2626;
+  box-shadow: 0 0 8px #dc2626, 0 0 16px rgba(220, 38, 38, 0.5);
+}
+
+/* Typography Enhancements */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+
+code, pre, [role="code"] {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: #60a5fa;
+}
+
+/* Panel Animations */
+.panel-enter {
+  animation: panelSlideIn 0.3s ease;
+}
+
+.status-update {
+  animation: statusPulse 0.6s ease;
 }
 
 /* Markdown rendering styles */
@@ -132,17 +300,17 @@ button {
 }
 
 .prose code {
-  background: rgba(124, 58, 237, 0.1);
-  color: #a855f7;
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
   padding: 0.2em 0.4em;
   border-radius: 0.25em;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-family: 'JetBrains Mono', monospace;
   font-size: 0.9em;
 }
 
 .prose pre {
-  background: rgba(13, 13, 13, 0.5);
-  border: 1px solid rgba(124, 58, 237, 0.1);
+  background: rgba(5, 5, 16, 0.7);
+  border: 1px solid rgba(59, 130, 246, 0.2);
   border-radius: 0.5em;
   overflow-x: auto;
   padding: 1em;

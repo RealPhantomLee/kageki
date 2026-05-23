@@ -121,14 +121,14 @@ export const HomePanel: React.FC = () => {
 
   if (loading && devices.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full bg-gray-900">
-        <div className="text-gray-400">Loading Home Assistant devices...</div>
+      <div className="flex items-center justify-center h-full bg-obsidian-bg">
+        <div className="text-obsidian-text-muted">Loading Home Assistant devices...</div>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col bg-gray-900 text-white">
+    <div className="h-full flex flex-col bg-obsidian-bg text-obsidian-text">
       {/* Header */}
       <div className="p-4 border-b border-gray-700">
         <div className="flex items-center justify-between">
@@ -140,7 +140,7 @@ export const HomePanel: React.FC = () => {
           </h2>
           <button
             onClick={() => loadDevices()}
-            className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded transition"
+            className="px-3 py-1 text-sm bg-obsidian-accent hover:bg-obsidian-accent-light rounded transition"
             disabled={loading}
           >
             {loading ? 'Refreshing...' : 'Refresh'}
@@ -161,7 +161,7 @@ export const HomePanel: React.FC = () => {
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      <div className="flex-1 overflow-y-auto h-full p-4 space-y-6">
         {/* Lights Section */}
         {lights.length > 0 && (
           <div>
@@ -239,13 +239,13 @@ export const HomePanel: React.FC = () => {
               {otherDevices.map((device) => (
                 <div
                   key={device.entity_id}
-                  className="bg-gray-800 rounded p-3 flex items-center justify-between"
+                  className="glass-card rounded p-3 flex items-center justify-between"
                 >
                   <div>
                     <div className="font-medium">{device.name}</div>
-                    <div className="text-xs text-gray-500">{device.entity_id}</div>
+                    <div className="text-xs text-obsidian-text-muted">{device.entity_id}</div>
                   </div>
-                  <div className="text-sm text-gray-400">{device.state}</div>
+                  <div className="text-sm text-obsidian-text-muted">{device.state}</div>
                 </div>
               ))}
             </div>
@@ -279,7 +279,7 @@ const LightCard: React.FC<LightCardProps> = ({
   const brightness = light.attributes?.brightness ?? 255;
 
   return (
-    <div className="bg-gray-800 rounded-lg p-4 space-y-3">
+    <div className="glass-card rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
         <div>
           <div className="font-medium">{light.name}</div>
@@ -290,8 +290,8 @@ const LightCard: React.FC<LightCardProps> = ({
           disabled={isControlling}
           className={`px-3 py-1 rounded text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
             isOn
-              ? 'bg-yellow-500 hover:bg-yellow-600 text-black'
-              : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+              ? 'bg-obsidian-accent hover:bg-obsidian-accent-light text-white'
+              : 'bg-obsidian-border hover:bg-obsidian-surface-hover text-obsidian-text'
           }`}
         >
           {isOn ? 'On' : 'Off'}
@@ -300,7 +300,7 @@ const LightCard: React.FC<LightCardProps> = ({
 
       {isOn && (
         <div className="space-y-2">
-          <label className="text-xs text-gray-400">Brightness</label>
+          <label className="text-xs text-obsidian-text-muted">Brightness</label>
           <input
             type="range"
             min="0"
@@ -308,9 +308,9 @@ const LightCard: React.FC<LightCardProps> = ({
             value={brightness}
             onChange={(e) => onBrightnessChange(light.entity_id, parseInt(e.target.value))}
             disabled={isControlling}
-            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+            className="w-full h-2 bg-obsidian-border rounded-lg appearance-none cursor-pointer"
           />
-          <div className="text-xs text-gray-500 text-right">
+          <div className="text-xs text-obsidian-text-muted text-right">
             {((brightness / 255) * 100).toFixed(0)}%
           </div>
         </div>
@@ -329,7 +329,7 @@ const SwitchCard: React.FC<SwitchCardProps> = ({ device, onToggle, isControlling
   const isOn = device.state === 'on';
 
   return (
-    <div className="bg-gray-800 rounded-lg p-4 flex items-center justify-between">
+    <div className="glass-card rounded-lg p-4 flex items-center justify-between">
       <div>
         <div className="font-medium">{device.name}</div>
         <div className="text-xs text-gray-500">{device.entity_id}</div>
@@ -339,8 +339,8 @@ const SwitchCard: React.FC<SwitchCardProps> = ({ device, onToggle, isControlling
         disabled={isControlling}
         className={`px-4 py-2 rounded font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
           isOn
-            ? 'bg-green-600 hover:bg-green-700 text-white'
-            : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+            ? 'bg-obsidian-success hover:bg-green-700 text-white'
+            : 'bg-obsidian-border hover:bg-obsidian-surface-hover text-obsidian-text'
         }`}
       >
         {isOn ? 'On' : 'Off'}

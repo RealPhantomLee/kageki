@@ -4,6 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Set
 
+import aiohttp
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import aiomqtt
@@ -58,6 +59,49 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# Global app state for HA connectivity
+app_state = {
+    "ha_available": False,
+}
+
+
+async def check_home_assistant_connectivity():
+    """Check Home Assistant connectivity on startup."""
+    settings = get_settings()
+    try:
+        if not settings.home_assistant.url or not settings.home_assistant.token:
+            log.warning("Home Assistant config missing; skipping connectivity check")
+            app_state["ha_available"] = False
+            return
+
+        headers = {
+            "Authorization": f"Bearer {settings.home_assistant.token}",
+            "Content-Type": "application/json",
+        }
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(
+                    f"{settings.home_assistant.url}/api/states",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        app_state["ha_available"] = True
+                        log.info("Home Assistant is reachable")
+                    else:
+                        app_state["ha_available"] = False
+                        log.warning(f"Home Assistant returned status {resp.status}")
+            except asyncio.TimeoutError:
+                app_state["ha_available"] = False
+                log.warning("Home Assistant connectivity check timed out")
+            except Exception as e:
+                app_state["ha_available"] = False
+                log.warning(f"Home Assistant unreachable: {e}")
+    except Exception as e:
+        log.error(f"Error in HA connectivity check: {e}")
+        app_state["ha_available"] = False
+
 
 async def mqtt_subscriber():
     """Subscribe to MQTT topics and fan out events to WebSocket clients and services."""
@@ -111,6 +155,9 @@ async def lifespan(app: FastAPI):
     print("Running database migrations...")
     await run_migrations_async()
 
+    print("Checking Home Assistant connectivity...")
+    await check_home_assistant_connectivity()
+
     print("Initializing Ollama cluster...")
     cluster = get_ollama_cluster()
     await cluster.initialize()
@@ -156,7 +203,11 @@ app.include_router(infra.router)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "phantom-portal"}
+    return {
+        "status": "ok",
+        "service": "phantom-portal",
+        "home_assistant_available": app_state["ha_available"],
+    }
 
 
 # WebSocket endpoints for real-time updates
