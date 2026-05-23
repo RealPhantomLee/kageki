@@ -15,26 +15,35 @@ log = logging.getLogger(__name__)
 class OllamaNode:
     """Represents a single Ollama instance in the cluster."""
 
-    def __init__(self, name: str, url: str, priority: int = 0, specialization: str = None):
+    def __init__(self, name: str, url: str, address: str, role: str = "worker", priority: int = 0, specialization: str = None):
         self.name = name
         self.url = url.rstrip('/')
+        self.address = address  # IP or hostname
+        self.role = role  # "master" or "worker"
         self.priority = priority  # Lower = higher priority
-        self.healthy = True
+        self.healthy = False  # Will be set by health check
+        self.ollama_online = False
         self.loaded_models = set()
-        self.specialization = specialization  # e.g., "embeddings", "llm", None (general)
+        self.specialization = specialization  # e.g., "embeddings", "llm", "control"
+        self.cpu_percent = None
+        self.cpu_cores = 4  # Default, can be updated
+        self.ram_used_mb = None
+        self.ram_total_mb = None
 
     async def health_check(self) -> bool:
         """Check if this node is responsive."""
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"{self.url}/api/tags", timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    self.healthy = resp.status == 200
-                    if self.healthy:
+                    self.ollama_online = resp.status == 200
+                    if self.ollama_online:
                         data = await resp.json()
                         self.loaded_models = {m['name'] for m in data.get('models', [])}
+                    self.healthy = self.ollama_online
                     return self.healthy
         except Exception as e:
-            log.error(f"Health check failed for {self.name}: {e}")
+            log.warning(f"Health check failed for {self.name}: {e}")
+            self.ollama_online = False
             self.healthy = False
             return False
 
@@ -73,24 +82,44 @@ class OllamaCluster:
 
     def __init__(self):
         self.nodes = []
+        self.routing_config = {
+            "llm_node": "cyberdeck",
+            "embeddings_node": "ai-pi",
+            "fallback_node": "cyberdeck"
+        }
         self._initialize_nodes()
 
     def _initialize_nodes(self):
         """Set up Ollama nodes from config."""
         settings = get_settings()
 
-        # Main Pi (primary, general LLM)
+        # blacknode (k3s master, control node with optional Ollama)
         self.nodes.append(OllamaNode(
-            name="main-pi",
-            url=f"http://{settings.mosquitto.host}:11434",  # localhost on main Pi
+            name="blacknode",
+            url="http://100.90.234.21:11434",
+            address="100.90.234.21",
+            role="master",
+            priority=2,
+            specialization="control"
+        ))
+
+        # cyberdeck (worker node, primary LLM models)
+        # Use localhost since Ollama and FastAPI server run on the same machine
+        self.nodes.append(OllamaNode(
+            name="cyberdeck",
+            url="http://localhost:11434",
+            address="localhost",
+            role="worker",
             priority=0,
             specialization="llm"  # Chat, narration, titles, key-points
         ))
 
-        # AI Pi (specialized for embeddings and reasoning)
+        # ai-pi (worker node, specialized for embeddings and reasoning)
         self.nodes.append(OllamaNode(
             name="ai-pi",
             url="http://192.168.1.15:11434",
+            address="192.168.1.15",
+            role="worker",
             priority=1,
             specialization="embeddings"  # Embeddings + reasoning backup
         ))
@@ -154,35 +183,44 @@ class OllamaCluster:
         return any(em in model.lower() for em in embedding_models)
 
     def _route_embedding_request(self, model: str) -> list:
-        """Route embedding requests to specialized AI Pi node."""
+        """Route embedding requests to specialized embeddings node."""
         healthy_nodes = [n for n in self.nodes if n.healthy]
+        target_node_name = self.routing_config.get("embeddings_node", "ai-pi")
+        fallback_node_name = self.routing_config.get("fallback_node", "cyberdeck")
 
-        # Try to use AI Pi (specialized) first
-        ai_pi = next((n for n in healthy_nodes if n.name == "ai-pi"), None)
-        if ai_pi and "nomic-embed-text" in ai_pi.loaded_models:
-            return [ai_pi]
+        # Try to use configured embeddings node first
+        target_node = next((n for n in healthy_nodes if n.name == target_node_name), None)
+        if target_node and model in target_node.loaded_models:
+            return [target_node]
 
-        # Fallback: use any healthy node with the model
-        fallback = [n for n in healthy_nodes if model in n.loaded_models]
-        if fallback:
-            return sorted(fallback, key=lambda n: n.priority)
+        # Fallback: use configured fallback node
+        fallback = next((n for n in healthy_nodes if n.name == fallback_node_name), None)
+        if fallback and model in fallback.loaded_models:
+            return [fallback]
 
-        # Last resort: use any healthy node (may pull model)
+        # Last resort: use any healthy node with the model
+        available = [n for n in healthy_nodes if model in n.loaded_models]
+        if available:
+            return sorted(available, key=lambda n: n.priority)
+
+        # Absolute fallback: any healthy node (may pull model)
         return sorted(healthy_nodes, key=lambda n: n.priority)
 
     def _route_llm_request(self, model: str) -> list:
-        """Route LLM requests (chat, narration, titles, key-points) to main Pi."""
+        """Route LLM requests to configured LLM node."""
         healthy_nodes = [n for n in self.nodes if n.healthy]
+        target_node_name = self.routing_config.get("llm_node", "cyberdeck")
+        fallback_node_name = self.routing_config.get("fallback_node", "cyberdeck")
 
-        # Prefer main Pi for general LLM tasks
-        main_pi = next((n for n in healthy_nodes if n.name == "main-pi"), None)
-        if main_pi:
-            return [main_pi] + [n for n in healthy_nodes if n.name != "main-pi"]
+        # Prefer configured LLM node for general LLM tasks
+        target_node = next((n for n in healthy_nodes if n.name == target_node_name), None)
+        if target_node:
+            return [target_node] + [n for n in healthy_nodes if n.name != target_node_name]
 
-        # Fallback: any healthy node with the model
-        fallback = [n for n in healthy_nodes if model in n.loaded_models]
+        # Fallback: try fallback node
+        fallback = next((n for n in healthy_nodes if n.name == fallback_node_name), None)
         if fallback:
-            return sorted(fallback, key=lambda n: n.priority)
+            return [fallback] + [n for n in healthy_nodes if n.name != fallback_node_name]
 
         # Last resort: sorted by priority
         return sorted(healthy_nodes, key=lambda n: n.priority)
@@ -193,6 +231,32 @@ class OllamaCluster:
         for node in self.nodes:
             all_models[node.name] = list(node.loaded_models)
         return all_models
+
+    async def get_routing_config(self) -> dict:
+        """Get current routing configuration."""
+        return {
+            "llm_node": self.routing_config.get("llm_node", "cyberdeck"),
+            "embeddings_node": self.routing_config.get("embeddings_node", "ai-pi"),
+            "fallback_node": self.routing_config.get("fallback_node", "cyberdeck")
+        }
+
+    async def set_route(self, task_type: str, target_node: str) -> dict:
+        """Update routing for a specific task type."""
+        valid_nodes = {n.name for n in self.nodes}
+        if target_node not in valid_nodes:
+            return {"error": f"Invalid target node: {target_node}"}
+
+        if task_type == "llm":
+            self.routing_config["llm_node"] = target_node
+        elif task_type == "embeddings":
+            self.routing_config["embeddings_node"] = target_node
+        else:
+            return {"error": f"Invalid task type: {task_type}"}
+
+        return {
+            "success": True,
+            "routing_config": self.routing_config
+        }
 
 
 # Singleton instance

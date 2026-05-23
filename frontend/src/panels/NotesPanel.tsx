@@ -4,19 +4,19 @@ import { createSyncWSManager } from '../api/websocket';
 import type { SyncMessage } from '../types/index';
 import axios from 'axios';
 import { formatDistanceToNow } from 'date-fns';
-import { marked } from 'marked';
+import { marked, Renderer } from 'marked';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/atom-one-dark.css';
+import JSZip from 'jszip';
 
-// Configure marked with highlight.js
-marked.setOptions({
-  highlight: (code, lang) => {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(code, { language: lang }).value;
-    }
-    return hljs.highlightAuto(code).value;
-  },
-});
+// Configure marked with custom renderer for syntax highlighting
+const renderer = new Renderer();
+renderer.code = ({ text, language }) => {
+  const validLang = language && hljs.getLanguage(language) ? language : 'plaintext';
+  const highlighted = hljs.highlight(text, { language: validLang }).value;
+  return `<pre><code class="hljs language-${validLang}">${highlighted}</code></pre>`;
+};
+marked.use({ renderer });
 
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -65,7 +65,9 @@ export const NotesPanel: React.FC = () => {
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importSource, setImportSource] = useState<string>('markdown');
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importLoading, setImportLoading] = useState(false);
+  const [importDragOver, setImportDragOver] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const wsManagerRef = useRef<ReturnType<typeof createSyncWSManager> | null>(null);
   const saveTimeoutRef = useRef<NodeJS.Timer | null>(null);
@@ -193,71 +195,78 @@ export const NotesPanel: React.FC = () => {
 
     if (nodes.length === 0) return;
 
-    // Clear previous graph
-    d3.select(graphContainerRef.current).selectAll('*').remove();
+    // Wait for modal animation to complete before reading dimensions
+    const timeoutId = setTimeout(() => {
+      if (!graphContainerRef.current) return;
 
-    const width = graphContainerRef.current.clientWidth;
-    const height = graphContainerRef.current.clientHeight;
+      // Clear previous graph
+      d3.select(graphContainerRef.current).selectAll('*').remove();
 
-    const svg = d3
-      .select(graphContainerRef.current)
-      .attr('width', width)
-      .attr('height', height);
+      const width = graphContainerRef.current.clientWidth;
+      const height = graphContainerRef.current.clientHeight;
 
-    const simulation = d3
-      .forceSimulation(nodes as any)
-      .force('link', d3.forceLink(links).id((d: any) => d.id).distance(100))
-      .force('charge', d3.forceManyBody().strength(-300))
-      .force('center', d3.forceCenter(width / 2, height / 2));
+      const svg = d3
+        .select(graphContainerRef.current)
+        .attr('width', width)
+        .attr('height', height);
 
-    const link = svg
-      .append('g')
-      .selectAll('line')
-      .data(links)
-      .enter()
-      .append('line')
-      .attr('stroke', '#7c3aed')
-      .attr('stroke-opacity', 0.6)
-      .attr('stroke-width', 2);
+      const simulation = d3
+        .forceSimulation(nodes as any)
+        .force('link', d3.forceLink(links).id((d: any) => d.id).distance(100))
+        .force('charge', d3.forceManyBody().strength(-300))
+        .force('center', d3.forceCenter(width / 2, height / 2));
 
-    const node = svg
-      .append('g')
-      .selectAll('circle')
-      .data(nodes)
-      .enter()
-      .append('circle')
-      .attr('r', 8)
-      .attr('fill', (d: any) => (d.id === activeNoteId ? '#a855f7' : '#7c3aed'))
-      .attr('stroke', '#1a1a1a')
-      .attr('stroke-width', 2)
-      .on('click', (_, d: any) => {
-        setActiveNote(d.id);
-      })
-      .style('cursor', 'pointer');
+      const link = svg
+        .append('g')
+        .selectAll('line')
+        .data(links)
+        .enter()
+        .append('line')
+        .attr('stroke', '#7c3aed')
+        .attr('stroke-opacity', 0.6)
+        .attr('stroke-width', 2);
 
-    const labels = svg
-      .append('g')
-      .selectAll('text')
-      .data(nodes)
-      .enter()
-      .append('text')
-      .text((d: any) => d.label.substring(0, 10))
-      .attr('font-size', '10px')
-      .attr('fill', '#e0e0e0')
-      .attr('text-anchor', 'middle')
-      .attr('pointer-events', 'none');
+      const node = svg
+        .append('g')
+        .selectAll('circle')
+        .data(nodes)
+        .enter()
+        .append('circle')
+        .attr('r', 8)
+        .attr('fill', (d: any) => (d.id === activeNoteId ? '#a855f7' : '#7c3aed'))
+        .attr('stroke', '#1a1a1a')
+        .attr('stroke-width', 2)
+        .on('click', (_, d: any) => {
+          setActiveNote(d.id);
+        })
+        .style('cursor', 'pointer');
 
-    simulation.on('tick', () => {
-      link
-        .attr('x1', (d: any) => d.source.x)
-        .attr('y1', (d: any) => d.source.y)
-        .attr('x2', (d: any) => d.target.x)
-        .attr('y2', (d: any) => d.target.y);
+      const labels = svg
+        .append('g')
+        .selectAll('text')
+        .data(nodes)
+        .enter()
+        .append('text')
+        .text((d: any) => d.label.substring(0, 10))
+        .attr('font-size', '10px')
+        .attr('fill', '#e0e0e0')
+        .attr('text-anchor', 'middle')
+        .attr('pointer-events', 'none');
 
-      node.attr('cx', (d: any) => d.x).attr('cy', (d: any) => d.y);
+      simulation.on('tick', () => {
+        link
+          .attr('x1', (d: any) => d.source.x)
+          .attr('y1', (d: any) => d.source.y)
+          .attr('x2', (d: any) => d.target.x)
+          .attr('y2', (d: any) => d.target.y);
 
-      labels.attr('x', (d: any) => d.x).attr('y', (d: any) => d.y + 15);
-    });
+        node.attr('cx', (d: any) => d.x).attr('cy', (d: any) => d.y);
+
+        labels.attr('x', (d: any) => d.x).attr('y', (d: any) => d.y + 15);
+      });
+    }, 100);
+
+    return () => clearTimeout(timeoutId);
   }, [showGraphModal, notes, activeNoteId, setActiveNote]);
 
   const handleNewNote = async () => {
@@ -314,7 +323,7 @@ export const NotesPanel: React.FC = () => {
     try {
       const response = await axios.get(`/api/notes/${activeNoteId}/export`);
       const element = document.createElement('a');
-      element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(response.data.content));
+      element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(response.data));
       element.setAttribute('download', `${getActiveNote()?.title || 'note'}.txt`);
       element.style.display = 'none';
       document.body.appendChild(element);
@@ -325,22 +334,94 @@ export const NotesPanel: React.FC = () => {
     }
   };
 
+  // Extract all .md files from dropped folders using FileSystemEntry API
+  const extractMdFilesFromEntries = async (entries: DataTransferItemList): Promise<File[]> => {
+    const files: File[] = [];
+
+    const traverseFileTree = async (item: FileSystemEntry, path: string = ''): Promise<void> => {
+      if (item.isFile) {
+        const fileItem = item as FileSystemFileEntry;
+        return new Promise((resolve) => {
+          fileItem.file((file: File) => {
+            if (file.name.endsWith('.md')) {
+              files.push(file);
+            }
+            resolve();
+          });
+        });
+      } else if (item.isDirectory) {
+        const dirItem = item as FileSystemDirectoryEntry;
+        const reader = dirItem.createReader();
+        return new Promise((resolve) => {
+          reader.readEntries(async (entries: FileSystemEntry[]) => {
+            for (const entry of entries) {
+              await traverseFileTree(entry, path + item.name + '/');
+            }
+            resolve();
+          });
+        });
+      }
+    };
+
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i].webkitGetAsEntry();
+      if (entry) {
+        await traverseFileTree(entry);
+      }
+    }
+
+    return files;
+  };
+
+  // Create a ZIP file from multiple markdown files (for Obsidian Vault format)
+  const createZipFromMarkdownFiles = async (files: File[]): Promise<File> => {
+    const zip = new JSZip();
+
+    for (const file of files) {
+      const content = await file.text();
+      zip.file(file.name, content);
+    }
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    return new File([zipBlob], 'obsidian_vault.zip', { type: 'application/zip' });
+  };
+
   const handleImportNotes = async () => {
-    if (!importFile) return;
+    // Determine which files to use
+    const filesToImport = importSource === 'markdown' ? importFiles : importFile ? [importFile] : [];
+    if (filesToImport.length === 0) return;
+
     setImportLoading(true);
     try {
+      let fileToUpload: File;
+      let sourceToUse = importSource;
+
+      if (importSource === 'markdown' && filesToImport.length > 1) {
+        // Multiple markdown files: create a ZIP and use obsidian_vault source
+        fileToUpload = await createZipFromMarkdownFiles(filesToImport);
+        sourceToUse = 'obsidian_vault';
+      } else if (importSource === 'markdown' && filesToImport.length === 1) {
+        fileToUpload = filesToImport[0];
+        sourceToUse = 'markdown';
+      } else {
+        fileToUpload = filesToImport[0];
+      }
+
       const formData = new FormData();
-      formData.append('file', importFile);
-      formData.append('source', importSource);
+      formData.append('file', fileToUpload);
+      formData.append('source', sourceToUse);
+
       const resp = await axios.post('/api/notes/import', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
+
       // Show success - imported notes count
-      const importedCount = resp.data.count || 1;
+      const importedCount = resp.data.imported || 1;
       setError(null);
       await loadNotes();
       setShowImportDialog(false);
       setImportFile(null);
+      setImportFiles([]);
       setImportSource('markdown');
     } catch (err) {
       setError(`Failed to import notes: ${String(err)}`);
@@ -391,8 +472,8 @@ export const NotesPanel: React.FC = () => {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
-              if (data.content) {
-                assistantMessage += data.content;
+              if (data.text) {
+                assistantMessage += data.text;
                 // Update last message with streaming content
                 setChatMessages((prev) => {
                   const updated = [...prev];
@@ -817,21 +898,76 @@ export const NotesPanel: React.FC = () => {
               </label>
 
               {/* File Drag & Drop */}
-              <label className="block border-2 border-dashed border-obsidian-border rounded-lg p-6 text-center cursor-pointer hover:bg-obsidian-surface-hover transition glass-card">
+              <label
+                className={`block border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition glass-card ${
+                  importDragOver
+                    ? 'border-obsidian-accent bg-obsidian-accent/10'
+                    : 'border-obsidian-border hover:bg-obsidian-surface-hover'
+                }`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setImportDragOver(true);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setImportDragOver(false);
+                }}
+                onDrop={async (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setImportDragOver(false);
+
+                  if (importSource === 'markdown') {
+                    // Use FileSystemEntry API for folder drag-drop
+                    const mdFiles = await extractMdFilesFromEntries(e.dataTransfer.items);
+                    if (mdFiles.length > 0) {
+                      setImportFiles(mdFiles);
+                      setImportFile(null);
+                    } else {
+                      setError('No .md files found in dropped folder');
+                    }
+                  } else {
+                    // Single file for other sources
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) {
+                      setImportFile(file);
+                      setImportFiles([]);
+                    }
+                  }
+                }}
+              >
                 <input
                   type="file"
-                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                  {...(importSource === 'markdown' ? { webkitdirectory: true, multiple: true } : { multiple: false })}
+                  onChange={(e) => {
+                    if (importSource === 'markdown') {
+                      const files = Array.from(e.target.files || []).filter(f => f.name.endsWith('.md'));
+                      setImportFiles(files);
+                      setImportFile(null);
+                    } else {
+                      setImportFile(e.target.files?.[0] || null);
+                      setImportFiles([]);
+                    }
+                  }}
                   className="hidden"
                 />
                 <div className="text-obsidian-text-muted">
-                  {importFile ? importFile.name : 'Click to select or drag & drop'}
+                  {importFiles.length > 0
+                    ? `${importFiles.length} .md file(s) selected`
+                    : importFile
+                    ? importFile.name
+                    : importSource === 'markdown'
+                    ? 'Click to select folder or drag & drop .md files'
+                    : 'Click to select or drag & drop file'}
                 </div>
               </label>
             </div>
 
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowImportDialog(false)}>Cancel</Button>
-              <Button onClick={handleImportNotes} disabled={!importFile || importLoading}>
+              <Button onClick={handleImportNotes} disabled={(!importFile && importFiles.length === 0) || importLoading}>
                 {importLoading ? 'Importing...' : 'Import'}
               </Button>
             </DialogFooter>

@@ -21,6 +21,7 @@ async def get_connection() -> aiosqlite.Connection:
     conn = await aiosqlite.connect(str(DB_PATH))
     await conn.execute("PRAGMA journal_mode=WAL")
     await conn.execute("PRAGMA synchronous=NORMAL")
+    await conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 

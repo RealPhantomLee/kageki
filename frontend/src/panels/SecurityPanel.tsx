@@ -8,7 +8,7 @@ import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Dialog, DialogContent } from '../components/ui/dialog';
-import { Shield, Camera, AlertTriangle, X, RefreshCw, ZoomIn, CheckCircle2, Circle } from 'lucide-react';
+import { Shield, Camera as CameraIcon, AlertTriangle, X, RefreshCw, ZoomIn, CheckCircle2, Circle } from 'lucide-react';
 
 interface CameraSnapshot {
   cameraId: string;
@@ -27,6 +27,7 @@ export const SecurityPanel: React.FC = () => {
     wsConnected,
     addEvent,
     setCameras,
+    setEvents,
     selectCamera,
     setArmed,
     setWsConnected,
@@ -75,14 +76,14 @@ export const SecurityPanel: React.FC = () => {
     const loadEvents = async () => {
       try {
         const response = await axios.get('/api/security/events?limit=50');
-        // Events will be added individually via WebSocket
+        setEvents(response.data.events || []);
       } catch (err) {
         console.error('Failed to load events:', err);
       }
     };
 
     loadEvents();
-  }, []);
+  }, [setEvents]);
 
   // Setup WebSocket connection
   useEffect(() => {
@@ -328,7 +329,7 @@ export const SecurityPanel: React.FC = () => {
                     </>
                   ) : (
                     <div className="w-full h-full flex items-center justify-center bg-obsidian-surface">
-                      <Camera className="w-12 h-12 text-obsidian-text-muted opacity-50" />
+                      <CameraIcon className="w-12 h-12 text-obsidian-text-muted opacity-50" />
                     </div>
                   )}
                 </div>

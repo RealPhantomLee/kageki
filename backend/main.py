@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import aiomqtt
 
 from backend.config import get_settings
-from backend.db.connection import run_migrations_async
+from backend.db.connection import run_migrations_async, get_connection
 from backend.routers import homeassistant, ai, security, notes, push, cluster, infra
 from backend.services.ai_service import DeepSeekClient
 from backend.services.ollama_cluster import get_ollama_cluster
@@ -103,6 +103,30 @@ async def check_home_assistant_connectivity():
         app_state["ha_available"] = False
 
 
+async def _write_security_event(
+    camera_name: str,
+    confidence: float,
+    narration: str,
+    thumbnail_path: str,
+    raw_payload: dict,
+    timestamp: str,
+):
+    """Persist a motion event to the security_events table."""
+    db = await get_connection()
+    try:
+        await db.execute(
+            """
+            INSERT INTO security_events
+            (camera_name, confidence, narration, thumbnail_path, raw_payload, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (camera_name, confidence, narration, thumbnail_path, json.dumps(raw_payload), timestamp),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def mqtt_subscriber():
     """Subscribe to MQTT topics and fan out events to WebSocket clients and services."""
     settings = get_settings()
@@ -145,6 +169,18 @@ async def mqtt_subscriber():
                     broadcast_msg["narration"] = narration
 
                 await manager.broadcast_security(broadcast_msg)
+
+                # Persist motion event to database (non-blocking)
+                asyncio.create_task(
+                    _write_security_event(
+                        camera_name=payload.get("camera", "unknown"),
+                        confidence=payload.get("confidence", 0.0),
+                        narration=narration or "",
+                        thumbnail_path=payload.get("thumbnail_url", ""),
+                        raw_payload=payload,
+                        timestamp=payload.get("timestamp", ""),
+                    )
+                )
     except Exception as e:
         log.error(f"MQTT subscriber error: {e}")
 

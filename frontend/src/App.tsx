@@ -11,9 +11,8 @@ interface InstallPromptEvent extends Event {
 }
 
 interface HealthStatus {
-  api: boolean;
-  nodeCount: number;
-  mqtt: boolean;
+  backendHealthy: boolean;
+  haConnected: boolean;
 }
 
 export const App: React.FC = () => {
@@ -23,9 +22,8 @@ export const App: React.FC = () => {
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const [isPWAInstalled, setIsPWAInstalled] = useState(false);
   const [health, setHealth] = useState<HealthStatus>({
-    api: false,
-    nodeCount: 0,
-    mqtt: false,
+    backendHealthy: false,
+    haConnected: false,
   });
   const [touchStartX, setTouchStartX] = useState(0);
   const [touchEndX, setTouchEndX] = useState(0);
@@ -136,23 +134,20 @@ export const App: React.FC = () => {
         if (isHealthy) {
           const data = await response.json();
           setHealth({
-            api: true,
-            nodeCount: data.nodes ? Object.keys(data.nodes).length : 0,
-            mqtt: data.mqtt?.connected || false,
+            backendHealthy: data.status === "ok",
+            haConnected: data.home_assistant_available || false,
           });
         } else {
           setHealth({
-            api: false,
-            nodeCount: 0,
-            mqtt: false,
+            backendHealthy: false,
+            haConnected: false,
           });
         }
       } catch (err) {
         console.error("Health check failed:", err);
         setHealth({
-          api: false,
-          nodeCount: 0,
-          mqtt: false,
+          backendHealthy: false,
+          haConnected: false,
         });
       }
     };
@@ -387,16 +382,12 @@ export const App: React.FC = () => {
         <div className="glass-card px-6 py-2 flex items-center justify-between text-xs text-obsidian-text-muted">
           <div className="flex gap-6">
             <div className="flex items-center gap-1">
-              <span className={`w-1.5 h-1.5 rounded-full ${health.api ? 'bg-obsidian-success' : 'bg-obsidian-error'}`}></span>
-              <span>API Connected</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${health.backendHealthy ? 'bg-obsidian-success' : 'bg-obsidian-error'}`}></span>
+              <span>Backend: {health.backendHealthy ? 'OK' : 'Degraded'}</span>
             </div>
             <div className="flex items-center gap-1">
-              <span className={`w-1.5 h-1.5 rounded-full ${health.nodeCount > 0 ? 'bg-obsidian-success' : 'bg-obsidian-error'}`}></span>
-              <span>{health.nodeCount} Node{health.nodeCount !== 1 ? 's' : ''}</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className={`w-1.5 h-1.5 rounded-full ${health.mqtt ? 'bg-obsidian-success' : 'bg-obsidian-error'}`}></span>
-              <span>MQTT Live</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${health.haConnected ? 'bg-obsidian-success' : 'bg-obsidian-error'}`}></span>
+              <span>HA: {health.haConnected ? 'Connected' : 'Unavailable'}</span>
             </div>
           </div>
           <div className="text-obsidian-text-muted">

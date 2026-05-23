@@ -22,6 +22,7 @@ from backend.services.markdown_utils import (
 )
 from backend.services.import_service import (
     import_obsidian_md,
+    import_obsidian_vault,
     import_apple_notes_enex,
     import_google_docs_html,
     import_notion_zip,
@@ -251,7 +252,7 @@ async def import_notes(source: str = Form(...), file: UploadFile = File(...)):
     Import notes from various formats.
 
     Request: multipart/form-data with source and file
-    - source: markdown|enex|html|notion|chatgpt
+    - source: markdown|obsidian_vault|enex|html|notion|chatgpt
     - file: upload file
 
     Returns: {"imported": <count>}
@@ -261,6 +262,8 @@ async def import_notes(source: str = Form(...), file: UploadFile = File(...)):
     try:
         if source == "markdown":
             notes = await import_obsidian_md(file_bytes)
+        elif source == "obsidian_vault":
+            notes = await import_obsidian_vault(file_bytes)
         elif source == "enex":
             notes = await import_apple_notes_enex(file_bytes)
         elif source == "html":

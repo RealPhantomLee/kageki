@@ -122,7 +122,10 @@ export const useNotesStore = create<NotesStore>((set, get) => ({
         title,
         content,
       });
-      const newNote = response.data;
+      const newNoteId = response.data.id;
+      // Fetch the full note object from the backend
+      const fullNoteResponse = await axios.get(`/api/notes/${newNoteId}`);
+      const newNote = fullNoteResponse.data;
       get().addNote(newNote);
       get().setActiveNote(newNote.id);
       return newNote;
@@ -187,11 +190,8 @@ export const useNotesStore = create<NotesStore>((set, get) => ({
 
   generateTitle: async (noteId: string, content: string) => {
     try {
-      const response = await axios.post(`/api/ai/generate-title`, {
-        note_id: noteId,
-        content,
-      });
-      const title = response.data.title || 'Untitled';
+      const response = await axios.post(`/api/ai/notes/${noteId}/suggest-title`);
+      const title = response.data.suggestions?.[0] || 'Untitled';
       get().updateNote(noteId, { title });
       return title;
     } catch (error) {
@@ -203,10 +203,7 @@ export const useNotesStore = create<NotesStore>((set, get) => ({
 
   generateKeyPoints: async (noteId: string, content: string) => {
     try {
-      const response = await axios.post(`/api/ai/generate-key-points`, {
-        note_id: noteId,
-        content,
-      });
+      const response = await axios.post(`/api/ai/notes/${noteId}/key-points`);
       return response.data.key_points || [];
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Failed to generate key points';

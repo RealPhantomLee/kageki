@@ -3,6 +3,7 @@ AI Router for Phantom Portal
 Handles AI-powered endpoints: chat, title suggestions, key point extraction, semantic search.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -55,7 +56,7 @@ async def _fetch_relevant_notes_for_context(
     return "\n\n".join(context_parts)
 
 
-async def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
+def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     """Helper: compute cosine similarity between two vectors."""
     if not vec_a or not vec_b:
         return 0.0
@@ -118,7 +119,7 @@ async def suggest_title_endpoint(note_id: str):
         if not note:
             raise HTTPException(status_code=404, detail="Note not found")
 
-        suggestions = ai_client.suggest_titles(note["content"])
+        suggestions = await asyncio.get_event_loop().run_in_executor(None, ai_client.suggest_titles, note["content"])
 
         return {"suggestions": suggestions}
 
@@ -140,7 +141,7 @@ async def key_points_endpoint(note_id: str):
             raise HTTPException(status_code=404, detail="Note not found")
 
         # Extract key points
-        key_points = ai_client.extract_key_points(note["content"])
+        key_points = await asyncio.get_event_loop().run_in_executor(None, ai_client.extract_key_points, note["content"])
 
         # Store in ai_summary column
         generated_at = datetime.utcnow().isoformat()
@@ -175,7 +176,7 @@ async def semantic_search_endpoint(query: str):
     db = await get_connection()
     try:
         # Embed the query
-        query_embedding = ai_client.embed_text(query)
+        query_embedding = await asyncio.get_event_loop().run_in_executor(None, ai_client.embed_text, query)
 
         # Fetch all notes with embeddings
         cursor = await db.execute(
@@ -203,7 +204,7 @@ async def semantic_search_endpoint(query: str):
                 )
                 content_row = await cursor.fetchone()
                 if content_row:
-                    note_embedding = ai_client.embed_text(content_row[0])
+                    note_embedding = await asyncio.get_event_loop().run_in_executor(None, ai_client.embed_text, content_row[0])
                     # Store it for future use
                     await db.execute(
                         """

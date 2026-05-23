@@ -13,6 +13,7 @@ export interface Note {
   ai_summary?: string;
   ai_summary_generated_at?: string;
   tags?: string[];
+  outgoing_links?: string[];
 }
 
 // Security/Blink types

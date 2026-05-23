@@ -72,6 +72,16 @@ export const api = {
       apiClient.get('/api/ai/search/semantic', { params: { query } }),
   },
 
+  // Cluster endpoints
+  cluster: {
+    status: () => apiClient.get('/api/cluster/status'),
+    routeInfo: () => apiClient.get('/api/cluster/route-info'),
+    pullModel: (modelName: string, node?: string) =>
+      apiClient.post(`/api/cluster/pull/${modelName}`, {}, { params: node ? { node } : {} }),
+    setRoute: (type: 'llm' | 'embeddings', targetNode: string) =>
+      apiClient.post('/api/cluster/route', { type, target_node: targetNode }),
+  },
+
   // Health check
   health: () => apiClient.get('/health'),
 };

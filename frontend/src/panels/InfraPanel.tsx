@@ -3,7 +3,8 @@ import axios from 'axios';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Card } from '../components/ui/card';
-import { Cpu, HardDrive, Zap, Container, AlertCircle, ExternalLink, X } from 'lucide-react';
+import { Cpu, HardDrive, Zap, Container, AlertCircle, ExternalLink, X, ChevronDown, Download } from 'lucide-react';
+import { api } from '../api/client';
 
 interface ServiceLink {
   port: number;
@@ -33,26 +34,37 @@ const SERVICE_LINKS: Record<string, ServiceLink> = {
 };
 
 export const InfraPanel: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<'docker' | 'system' | 'k3s' | 'cluster'>('docker');
   const [containers, setContainers] = useState<any[]>([]);
   const [metrics, setMetrics] = useState<any>(null);
   const [k3sNodes, setK3sNodes] = useState<any[]>([]);
+  const [clusterStatus, setClusterStatus] = useState<any>(null);
+  const [clusterRouteInfo, setClusterRouteInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [controlError, setControlError] = useState('');
   const [selectedContainer, setSelectedContainer] = useState<ModalContainer | null>(null);
   const [controllingContainer, setControllingContainer] = useState<string | null>(null);
+  const [pullModelDialog, setPullModelDialog] = useState<{ node: string } | null>(null);
+  const [pullModelName, setPullModelName] = useState('');
+  const [selectedPullNode, setSelectedPullNode] = useState('');
+  const [routeDropdownOpen, setRouteDropdownOpen] = useState<string | null>(null);
 
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [containerRes, metricsRes, k3sRes] = await Promise.all([
+      const [containerRes, metricsRes, k3sRes, clusterRes, routeRes] = await Promise.all([
         axios.get('/api/infra/containers'),
         axios.get('/api/infra/metrics'),
         axios.get('/api/infra/k3s/nodes'),
+        api.cluster.status(),
+        api.cluster.routeInfo(),
       ]);
       setContainers(containerRes.data.containers || []);
       setMetrics(metricsRes.data);
       setK3sNodes(k3sRes.data.nodes || []);
+      setClusterStatus(clusterRes.data);
+      setClusterRouteInfo(routeRes.data);
     } catch (err: any) {
       setError(err.response?.data?.error || String(err));
     } finally {
@@ -90,6 +102,29 @@ export const InfraPanel: React.FC = () => {
     return false; // restart always enabled
   };
 
+  const handlePullModel = async () => {
+    if (!pullModelName || !selectedPullNode) return;
+    try {
+      await api.cluster.pullModel(pullModelName, selectedPullNode);
+      setPullModelDialog(null);
+      setPullModelName('');
+      setSelectedPullNode('');
+      await fetchData();
+    } catch (err: any) {
+      setControlError(`Failed to pull model: ${err.response?.data?.error || err.message}`);
+    }
+  };
+
+  const handleSetRoute = async (type: 'llm' | 'embeddings', targetNode: string) => {
+    try {
+      await api.cluster.setRoute(type, targetNode);
+      setRouteDropdownOpen(null);
+      await fetchData();
+    } catch (err: any) {
+      setControlError(`Failed to set route: ${err.response?.data?.error || err.message}`);
+    }
+  };
+
   const openContainerDetails = (c: any) => {
     setSelectedContainer({
       id: c.id,
@@ -108,9 +143,53 @@ export const InfraPanel: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-obsidian-bg">
-      {/* Header */}
+      {/* Header with Tabs */}
       <div className="glass-card p-4 border-b border-obsidian-border">
-        <h2 className="text-xl font-bold text-obsidian-text">Infrastructure</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xl font-bold text-obsidian-text">Infrastructure</h2>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setActiveTab('docker')}
+            className={`px-3 py-2 rounded text-sm font-medium transition-colors ${
+              activeTab === 'docker'
+                ? 'bg-obsidian-accent text-obsidian-bg'
+                : 'bg-obsidian-bg-secondary text-obsidian-text hover:bg-obsidian-bg-secondary/80'
+            }`}
+          >
+            Docker
+          </button>
+          <button
+            onClick={() => setActiveTab('system')}
+            className={`px-3 py-2 rounded text-sm font-medium transition-colors ${
+              activeTab === 'system'
+                ? 'bg-obsidian-accent text-obsidian-bg'
+                : 'bg-obsidian-bg-secondary text-obsidian-text hover:bg-obsidian-bg-secondary/80'
+            }`}
+          >
+            System
+          </button>
+          <button
+            onClick={() => setActiveTab('k3s')}
+            className={`px-3 py-2 rounded text-sm font-medium transition-colors ${
+              activeTab === 'k3s'
+                ? 'bg-obsidian-accent text-obsidian-bg'
+                : 'bg-obsidian-bg-secondary text-obsidian-text hover:bg-obsidian-bg-secondary/80'
+            }`}
+          >
+            K3s
+          </button>
+          <button
+            onClick={() => setActiveTab('cluster')}
+            className={`px-3 py-2 rounded text-sm font-medium transition-colors ${
+              activeTab === 'cluster'
+                ? 'bg-obsidian-accent text-obsidian-bg'
+                : 'bg-obsidian-bg-secondary text-obsidian-text hover:bg-obsidian-bg-secondary/80'
+            }`}
+          >
+            Cluster
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -128,8 +207,8 @@ export const InfraPanel: React.FC = () => {
         </div>
       )}
 
-      {/* System Metrics */}
-      {metrics && (
+      {/* System Metrics - System Tab */}
+      {activeTab === 'system' && metrics && (
         <div className="p-4 grid grid-cols-3 gap-3">
           <div className="glass-card p-3 rounded border border-obsidian-border">
             <div className="flex items-center gap-2 mb-2">
@@ -175,7 +254,8 @@ export const InfraPanel: React.FC = () => {
         </div>
       )}
 
-      {/* Containers Section */}
+      {/* Containers Section - Docker Tab */}
+      {activeTab === 'docker' && (
       <div className="flex-1 flex flex-col overflow-hidden p-4">
         <h3 className="font-semibold text-obsidian-text mb-3">Containers ({containers.length})</h3>
         <div className="flex-1 overflow-y-auto h-full space-y-2">
@@ -257,10 +337,11 @@ export const InfraPanel: React.FC = () => {
           })}
         </div>
       </div>
+      )}
 
-      {/* k3s Nodes Section */}
-      {k3sNodes.length > 0 && (
-        <div className="p-4 border-t border-obsidian-border flex-1 flex flex-col overflow-hidden">
+      {/* k3s Nodes Section - K3s Tab */}
+      {activeTab === 'k3s' && k3sNodes.length > 0 && (
+        <div className="p-4 flex-1 flex flex-col overflow-hidden">
           <h3 className="font-semibold text-obsidian-text mb-3">K3s Nodes</h3>
           <div className="overflow-y-auto h-full space-y-2">
             {k3sNodes.map((node, idx) => (
@@ -271,6 +352,226 @@ export const InfraPanel: React.FC = () => {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Cluster Tab */}
+      {activeTab === 'cluster' && clusterStatus && (
+        <div className="flex-1 flex flex-col overflow-hidden p-4">
+          {/* Pool Summary */}
+          <div className="glass-card p-3 rounded border border-obsidian-border mb-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm">
+                <span className="text-obsidian-accent font-semibold">●</span>
+                <span className="text-obsidian-text ml-2">{clusterStatus.pool.online_nodes} online nodes</span>
+              </div>
+              <div className="text-sm text-obsidian-text-muted">
+                {clusterStatus.pool.total_cpu_cores} CPU / {Math.round(clusterStatus.pool.total_ram_mb / 1024)}GB RAM
+              </div>
+            </div>
+          </div>
+
+          {/* Node Cards */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            {clusterStatus.nodes.map((node: any) => (
+              <div key={node.name} className={`glass-card p-3 rounded border ${node.online ? 'border-obsidian-accent' : 'border-obsidian-error/30'}`}>
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <h4 className="font-semibold text-obsidian-text text-sm">{node.name}</h4>
+                    <p className="text-xs text-obsidian-text-muted">{node.address}</p>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <Badge className={`text-xs ${node.online ? 'bg-obsidian-success' : 'bg-obsidian-error'}`}>
+                      {node.role}
+                    </Badge>
+                  </div>
+                </div>
+
+                <div className="space-y-2 text-xs mb-3">
+                  {node.online ? (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-obsidian-text-muted">CPU:</span>
+                        <span className="text-obsidian-text">{node.cpu_percent ?? 'N/A'}%</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-obsidian-text-muted">RAM:</span>
+                        <span className="text-obsidian-text">{node.ram_used_mb ?? 0}MB / {node.ram_total_mb ?? 0}MB</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-obsidian-error text-xs">Offline</div>
+                  )}
+                </div>
+
+                <div className="mb-3 pb-3 border-b border-obsidian-border">
+                  <div className="flex items-center gap-1 mb-2">
+                    <div className={`w-2 h-2 rounded-full ${node.ollama_online ? 'bg-obsidian-success' : 'bg-obsidian-error'}`} />
+                    <span className="text-xs text-obsidian-text-muted">Ollama</span>
+                  </div>
+                  {node.ollama_models.length > 0 ? (
+                    <div className="space-y-1">
+                      {node.ollama_models.map((model: string, idx: number) => (
+                        <div key={idx} className="text-xs text-obsidian-text bg-obsidian-bg-secondary px-2 py-1 rounded">
+                          {model}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-obsidian-text-muted">No models</div>
+                  )}
+                </div>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full text-xs gap-1"
+                  onClick={() => {
+                    setPullModelDialog({ node: node.name });
+                    setSelectedPullNode(node.name);
+                  }}
+                  disabled={!node.online}
+                >
+                  <Download className="w-3 h-3" />
+                  Pull Model
+                </Button>
+              </div>
+            ))}
+          </div>
+
+          {/* Routing Rules */}
+          <div className="glass-card p-3 rounded border border-obsidian-border">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-semibold text-obsidian-text text-sm">Routing Rules</h4>
+              <span className="text-xs text-obsidian-text-muted">[Auto-updates every 15s]</span>
+            </div>
+
+            <div className="space-y-2">
+              {/* LLM Route */}
+              <div className="flex items-center justify-between p-2 bg-obsidian-bg-secondary rounded text-sm">
+                <span className="text-obsidian-text">LLM requests</span>
+                <div className="relative">
+                  <button
+                    onClick={() => setRouteDropdownOpen(routeDropdownOpen === 'llm' ? null : 'llm')}
+                    className="flex items-center gap-1 px-2 py-1 bg-obsidian-accent text-obsidian-bg rounded text-xs font-medium"
+                  >
+                    {clusterStatus.routing.llm_node}
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                  {routeDropdownOpen === 'llm' && (
+                    <div className="absolute right-0 mt-1 bg-obsidian-bg-secondary border border-obsidian-border rounded shadow-lg z-10 min-w-32">
+                      {clusterStatus.nodes
+                        .filter((n: any) => n.online)
+                        .map((n: any) => (
+                          <button
+                            key={n.name}
+                            onClick={() => handleSetRoute('llm', n.name)}
+                            className="block w-full text-left px-3 py-2 text-xs text-obsidian-text hover:bg-obsidian-accent/20"
+                          >
+                            {n.name}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Embeddings Route */}
+              <div className="flex items-center justify-between p-2 bg-obsidian-bg-secondary rounded text-sm">
+                <span className="text-obsidian-text">Embeddings</span>
+                <div className="relative">
+                  <button
+                    onClick={() => setRouteDropdownOpen(routeDropdownOpen === 'embeddings' ? null : 'embeddings')}
+                    className="flex items-center gap-1 px-2 py-1 bg-obsidian-accent text-obsidian-bg rounded text-xs font-medium"
+                  >
+                    {clusterStatus.routing.embeddings_node}
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                  {routeDropdownOpen === 'embeddings' && (
+                    <div className="absolute right-0 mt-1 bg-obsidian-bg-secondary border border-obsidian-border rounded shadow-lg z-10 min-w-32">
+                      {clusterStatus.nodes
+                        .filter((n: any) => n.online)
+                        .map((n: any) => (
+                          <button
+                            key={n.name}
+                            onClick={() => handleSetRoute('embeddings', n.name)}
+                            className="block w-full text-left px-3 py-2 text-xs text-obsidian-text hover:bg-obsidian-accent/20"
+                          >
+                            {n.name}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="text-xs text-obsidian-text-muted pt-1">
+                Fallback: {clusterStatus.routing.fallback_node}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pull Model Dialog */}
+      {pullModelDialog && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onClick={() => setPullModelDialog(null)}
+        >
+          <div
+            className="bg-obsidian-bg border border-obsidian-border rounded-lg max-w-sm w-full shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b border-obsidian-border">
+              <h2 className="text-lg font-bold text-obsidian-text">Pull Model</h2>
+            </div>
+            <div className="p-4 space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-obsidian-text-muted mb-1">
+                  Model Name
+                </label>
+                <input
+                  type="text"
+                  value={pullModelName}
+                  onChange={(e) => setPullModelName(e.target.value)}
+                  placeholder="e.g., qwen2.5:1.5b"
+                  className="w-full px-3 py-2 bg-obsidian-bg-secondary border border-obsidian-border rounded text-obsidian-text text-sm focus:outline-none focus:border-obsidian-accent"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-obsidian-text-muted mb-1">
+                  Target Node
+                </label>
+                <select
+                  value={selectedPullNode}
+                  onChange={(e) => setSelectedPullNode(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-bg-secondary border border-obsidian-border rounded text-obsidian-text text-sm focus:outline-none focus:border-obsidian-accent"
+                >
+                  <option value="">Select node...</option>
+                  {clusterStatus?.nodes
+                    .filter((n: any) => n.online)
+                    .map((n: any) => (
+                      <option key={n.name} value={n.name}>
+                        {n.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-2 p-4 border-t border-obsidian-border">
+              <Button onClick={() => setPullModelDialog(null)} variant="outline" className="flex-1 text-xs">
+                Cancel
+              </Button>
+              <Button
+                onClick={handlePullModel}
+                disabled={!pullModelName || !selectedPullNode}
+                className="flex-1 text-xs"
+              >
+                Pull
+              </Button>
+            </div>
           </div>
         </div>
       )}

@@ -11,15 +11,13 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
+from pywebpush import webpush, WebPushException
 
 from backend.config import get_settings
+from backend.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/push", tags=["push"])
-
-# In-memory subscription storage (in production, use a database)
-# Map of user_id -> list of subscription objects
-subscriptions = {}
 
 
 class PushSubscription(BaseModel):
@@ -82,13 +80,8 @@ async def subscribe(request: PushSubscribeRequest, settings=Depends(get_settings
 
     The client calls this after getting a subscription from the Push Manager.
     The subscription is stored server-side for later use when sending notifications.
-
-    In production, you would:
-    1. Associate the subscription with the current user
-    2. Store in a database
-    3. Check for duplicate subscriptions
-    4. Handle subscription expiration
     """
+    db = None
     try:
         endpoint = request.endpoint
 
@@ -99,31 +92,32 @@ async def subscribe(request: PushSubscribeRequest, settings=Depends(get_settings
                 detail="Endpoint must be HTTPS",
             )
 
-        # In this example, use a dummy user_id
-        # In production, get from authentication token
-        user_id = "current_user"
-
-        # Store subscription
-        if user_id not in subscriptions:
-            subscriptions[user_id] = []
+        db = await get_connection()
 
         # Check if already subscribed
-        for sub in subscriptions[user_id]:
-            if sub["endpoint"] == endpoint:
-                logger.info(f"Subscription already exists for endpoint {endpoint}")
-                return {"status": "ok", "message": "Already subscribed"}
-
-        # Add new subscription
-        subscriptions[user_id].append(
-            {
-                "endpoint": endpoint,
-                "keys": request.keys,
-                "expirationTime": request.expirationTime,
-                "subscribedAt": datetime.utcnow().isoformat(),
-            }
+        cursor = await db.execute(
+            "SELECT id FROM push_subscriptions WHERE endpoint = ?",
+            (endpoint,)
         )
+        existing = await cursor.fetchone()
+        if existing:
+            logger.info(f"Subscription already exists for endpoint {endpoint}")
+            return {"status": "ok", "message": "Already subscribed"}
 
-        logger.info(f"Push subscription registered for user {user_id}")
+        # Add new subscription to database
+        await db.execute(
+            """INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent)
+               VALUES (?, ?, ?, ?)""",
+            (
+                endpoint,
+                request.keys.get("p256dh"),
+                request.keys.get("auth"),
+                None,  # user_agent not provided in request
+            )
+        )
+        await db.commit()
+
+        logger.info(f"Push subscription registered for endpoint {endpoint}")
         return {"status": "ok", "message": "Subscribed successfully"}
 
     except Exception as e:
@@ -132,6 +126,9 @@ async def subscribe(request: PushSubscribeRequest, settings=Depends(get_settings
             status_code=500,
             detail="Failed to subscribe to push notifications",
         )
+    finally:
+        if db:
+            await db.close()
 
 
 @router.post("/unsubscribe")
@@ -141,24 +138,20 @@ async def unsubscribe(request: PushUnsubscribeRequest):
 
     Called when user clicks "Disable Notifications" or unsubscribes via browser.
     """
+    db = None
     try:
         endpoint = request.endpoint
-        user_id = "current_user"
+        db = await get_connection()
 
-        if user_id in subscriptions:
-            # Remove matching subscription
-            original_count = len(subscriptions[user_id])
-            subscriptions[user_id] = [
-                sub
-                for sub in subscriptions[user_id]
-                if sub["endpoint"] != endpoint
-            ]
+        # Delete subscription from database
+        await db.execute(
+            "DELETE FROM push_subscriptions WHERE endpoint = ?",
+            (endpoint,)
+        )
+        await db.commit()
 
-            if len(subscriptions[user_id]) < original_count:
-                logger.info(f"Unsubscribed endpoint {endpoint}")
-                return {"status": "ok", "message": "Unsubscribed successfully"}
-
-        return {"status": "ok", "message": "Endpoint not found or already unsubscribed"}
+        logger.info(f"Unsubscribed endpoint {endpoint}")
+        return {"status": "ok", "message": "Unsubscribed successfully"}
 
     except Exception as e:
         logger.error(f"Failed to unsubscribe: {e}")
@@ -166,6 +159,9 @@ async def unsubscribe(request: PushUnsubscribeRequest):
             status_code=500,
             detail="Failed to unsubscribe",
         )
+    finally:
+        if db:
+            await db.close()
 
 
 @router.post("/test")
@@ -175,14 +171,20 @@ async def send_test_notification(settings=Depends(get_settings)):
 
     Useful for testing the notification system during development.
     """
+    db = None
     try:
-        user_id = "current_user"
-        user_subscriptions = subscriptions.get(user_id, [])
+        db = await get_connection()
 
-        if not user_subscriptions:
+        # Fetch all subscriptions from database
+        cursor = await db.execute(
+            "SELECT endpoint, p256dh, auth FROM push_subscriptions"
+        )
+        rows = await cursor.fetchall()
+
+        if not rows:
             raise HTTPException(
                 status_code=400,
-                detail="No active subscriptions for this user",
+                detail="No active subscriptions",
             )
 
         # Prepare test notification payload
@@ -202,35 +204,47 @@ async def send_test_notification(settings=Depends(get_settings)):
             },
         }
 
-        # In production, use python-web-push to send actual push messages
-        # For now, just log that we would send them
-        logger.info(
-            f"Would send test notification to {len(user_subscriptions)} subscriptions"
-        )
+        sent_count = 0
+        failed_count = 0
 
-        # Example of how to use python-web-push:
-        # from web_push import webpush, WebPushException
-        #
-        # for subscription in user_subscriptions:
-        #     try:
-        #         webpush(
-        #             subscription_info=subscription,
-        #             data=json.dumps(payload),
-        #             vapid_private_key=settings.push.vapid_private_key,
-        #             vapid_claims={
-        #                 "sub": "mailto:admin@example.com",
-        #                 "aud": subscription['endpoint'],
-        #             }
-        #         )
-        #     except WebPushException as e:
-        #         if e.response.status_code == 410:
-        #             # Subscription expired, remove it
-        #             subscriptions[user_id].remove(subscription)
-        #         logger.error(f"Failed to send push: {e}")
+        # Send notification to each subscription
+        for endpoint, p256dh, auth in rows:
+            try:
+                subscription_info = {
+                    "endpoint": endpoint,
+                    "keys": {
+                        "p256dh": p256dh,
+                        "auth": auth,
+                    }
+                }
+                webpush(
+                    subscription_info=subscription_info,
+                    data=json.dumps(payload),
+                    vapid_private_key=settings.web_push.vapid_private_key,
+                    vapid_claims={"sub": "mailto:admin@phantom.local"}
+                )
+                sent_count += 1
+            except WebPushException as e:
+                if e.response.status_code == 410:
+                    # Subscription expired, remove it
+                    await db.execute(
+                        "DELETE FROM push_subscriptions WHERE endpoint = ?",
+                        (endpoint,)
+                    )
+                    await db.commit()
+                failed_count += 1
+                logger.error(f"Failed to send push to {endpoint}: {e}")
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"Failed to send push to {endpoint}: {e}")
+
+        logger.info(f"Test notification sent to {sent_count}/{len(rows)} subscriptions")
 
         return {
             "status": "ok",
-            "message": f"Test notification sent to {len(user_subscriptions)} subscription(s)",
+            "message": f"Test notification sent to {sent_count}/{len(rows)} subscription(s)",
+            "sent": sent_count,
+            "failed": failed_count,
         }
 
     except Exception as e:
@@ -239,6 +253,9 @@ async def send_test_notification(settings=Depends(get_settings)):
             status_code=500,
             detail="Failed to send test notification",
         )
+    finally:
+        if db:
+            await db.close()
 
 
 @router.get("/subscriptions/count")
@@ -248,11 +265,22 @@ async def get_subscription_count():
 
     For monitoring and debugging.
     """
-    total_subs = sum(len(subs) for subs in subscriptions.values())
-    return {"total_subscriptions": total_subs, "users": len(subscriptions)}
+    db = None
+    try:
+        db = await get_connection()
+        cursor = await db.execute("SELECT COUNT(*) FROM push_subscriptions")
+        row = await cursor.fetchone()
+        total_subs = row[0] if row else 0
+        return {"total_subscriptions": total_subs, "users": 1}
+    except Exception as e:
+        logger.error(f"Error counting subscriptions: {e}")
+        return {"total_subscriptions": 0, "users": 0}
+    finally:
+        if db:
+            await db.close()
 
 
-# Example helper function for sending notifications from other parts of the app
+# Helper function for sending notifications from other parts of the app
 async def send_motion_notification(motion_event: dict, settings):
     """
     Send push notification for motion detection.
@@ -264,12 +292,18 @@ async def send_motion_notification(motion_event: dict, settings):
                       thumbnail_url, narration
         settings: App settings with VAPID keys
     """
+    db = None
     try:
-        user_id = "current_user"
-        user_subscriptions = subscriptions.get(user_id, [])
+        db = await get_connection()
 
-        if not user_subscriptions:
-            logger.debug(f"No subscriptions for user {user_id}")
+        # Fetch all subscriptions from database
+        cursor = await db.execute(
+            "SELECT endpoint, p256dh, auth FROM push_subscriptions"
+        )
+        rows = await cursor.fetchall()
+
+        if not rows:
+            logger.debug("No subscriptions for motion notification")
             return
 
         payload = {
@@ -293,28 +327,38 @@ async def send_motion_notification(motion_event: dict, settings):
             },
         }
 
-        logger.info(
-            f"Sending motion notification to {len(user_subscriptions)} subscriptions"
-        )
+        logger.info(f"Sending motion notification to {len(rows)} subscriptions")
 
-        # In production, actually send the notifications:
-        # from web_push import webpush, WebPushException
-        #
-        # for subscription in user_subscriptions:
-        #     try:
-        #         webpush(
-        #             subscription_info=subscription,
-        #             data=json.dumps(payload),
-        #             vapid_private_key=settings.web_push.vapid_private_key,
-        #             vapid_claims={
-        #                 "sub": f"mailto:{settings.web_push.vapid_email}",
-        #                 "aud": subscription['endpoint'],
-        #             }
-        #         )
-        #     except WebPushException as e:
-        #         if e.response.status_code == 410:
-        #             subscriptions[user_id].remove(subscription)
-        #         logger.error(f"Failed to send motion notification: {e}")
+        # Send notification to each subscription
+        for endpoint, p256dh, auth in rows:
+            try:
+                subscription_info = {
+                    "endpoint": endpoint,
+                    "keys": {
+                        "p256dh": p256dh,
+                        "auth": auth,
+                    }
+                }
+                webpush(
+                    subscription_info=subscription_info,
+                    data=json.dumps(payload),
+                    vapid_private_key=settings.web_push.vapid_private_key,
+                    vapid_claims={"sub": f"mailto:{settings.web_push.vapid_email}"}
+                )
+            except WebPushException as e:
+                if e.response.status_code == 410:
+                    # Subscription expired, remove it
+                    await db.execute(
+                        "DELETE FROM push_subscriptions WHERE endpoint = ?",
+                        (endpoint,)
+                    )
+                    await db.commit()
+                logger.error(f"Failed to send motion notification to {endpoint}: {e}")
+            except Exception as e:
+                logger.error(f"Failed to send motion notification to {endpoint}: {e}")
 
     except Exception as e:
         logger.error(f"Error sending motion notification: {e}")
+    finally:
+        if db:
+            await db.close()

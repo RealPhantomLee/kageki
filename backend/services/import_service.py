@@ -35,6 +35,38 @@ async def import_obsidian_md(file_bytes: bytes) -> List[NoteData]:
     return [NoteData(title, body)]
 
 
+async def import_obsidian_vault(file_bytes: bytes) -> List[NoteData]:
+    """
+    Obsidian vault export — unzip and extract all .md files recursively.
+    Returns list of NoteData for each markdown file found.
+    """
+    notes = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
+            for filename in z.namelist():
+                if filename.endswith('.md'):
+                    try:
+                        content = z.read(filename).decode('utf-8')
+                        # Extract title from first H1, or use filename
+                        lines = content.split('\n', 1)
+                        title = lines[0].replace('# ', '').strip() if lines[0].startswith('#') else 'Untitled'
+                        body = lines[1].strip() if len(lines) > 1 else content
+                        if not title or title == 'Untitled':
+                            title = filename.rsplit('/', 1)[-1].replace('.md', '')
+                        notes.append(NoteData(title, body))
+                    except Exception as e:
+                        log.warning(f"Failed to import {filename}: {e}")
+                        continue
+    except zipfile.BadZipFile as e:
+        log.error(f"Failed to extract zip file: {e}")
+        raise ValueError("Invalid ZIP file provided")
+    except Exception as e:
+        log.error(f"Error importing obsidian vault: {e}")
+        raise ValueError(f"Failed to import vault: {str(e)}")
+
+    return notes
+
+
 async def import_apple_notes_enex(file_bytes: bytes) -> List[NoteData]:
     """Apple Notes .enex XML — parse note-level <note> elements"""
     if html2text is None:

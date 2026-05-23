@@ -76,7 +76,7 @@ Example output: "Person detected on front porch at high confidence"."""
         )
 
         try:
-            response = self._sync_client.chat.completions.create(
+            response = await self._async_client.chat.completions.create(
                 model=self._model,
                 messages=[
                     {"role": "system", "content": system_prompt},

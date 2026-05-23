@@ -36,9 +36,24 @@ async def get_containers():
     try:
         client = docker.from_env()
         containers = []
+        loop = asyncio.get_event_loop()
+
         for c in client.containers.list(all=True):
-            # Determine status: running or exited
-            container_status = "running" if c.status.startswith("Up") else "exited"
+            # Determine status: docker-py returns "running", "exited", "paused", etc.
+            container_status = c.status
+
+            # Fetch logs, volumes, and env in executor to avoid blocking
+            def get_container_details(container):
+                logs = container.logs(tail=50).decode("utf-8", errors="replace")
+                volumes = [
+                    {"source": m["Source"], "dest": m["Destination"]}
+                    for m in (container.attrs.get("Mounts") or [])
+                ]
+                env = container.attrs.get("Config", {}).get("Env") or []
+                return logs, volumes, env
+
+            logs, volumes, env = await loop.run_in_executor(None, get_container_details, c)
+
             containers.append({
                 "id": c.id[:12],
                 "name": c.name,
@@ -47,6 +62,9 @@ async def get_containers():
                 "state": c.status,
                 "ports": c.ports,
                 "created": c.attrs['Created'],
+                "logs": logs,
+                "volumes": volumes,
+                "env": env,
             })
         return {"containers": containers}
     except Exception as e:

@@ -1,5 +1,7 @@
 import logging
 import os
+import json
+from pathlib import Path
 from typing import Optional
 from blinkpy.blinkpy import Blink
 from blinkpy.auth import Auth
@@ -33,6 +35,23 @@ class BlinkService:
             if self.blinkpy is None:
                 self.blinkpy = Blink()
 
+            # Try to load saved credentials first
+            creds_path = Path(__file__).parent.parent.parent / "data" / "blink_credentials.json"
+            if creds_path.exists():
+                try:
+                    with open(creds_path) as f:
+                        saved_creds = json.load(f)
+                    # If token exists and is non-null, use saved credentials
+                    if saved_creds.get("token"):
+                        self.blinkpy.auth = Auth(saved_creds)
+                        await self.blinkpy.start()
+                        self._authenticated = True
+                        logger.info("Blink authentication successful (loaded from cache)")
+                        return True
+                except Exception as e:
+                    logger.debug(f"Could not load saved credentials: {e}")
+
+            # Fresh authentication
             auth_data = {
                 "username": self.settings.blink.username,
                 "password": self.settings.blink.password,
@@ -40,12 +59,6 @@ class BlinkService:
             }
             self.blinkpy.auth = Auth(auth_data)
             await self.blinkpy.start()
-
-            # Load networks and sync modules
-            await self.blinkpy.networks.get_networks()
-
-            for network_id, network in self.blinkpy.networks.items():
-                await network.get_events(http_only=True)
 
             self._authenticated = True
             logger.info("Blink authentication successful")
@@ -62,13 +75,13 @@ class BlinkService:
 
         cameras = []
         try:
-            for network_id, network in self.blinkpy.networks.items():
-                for camera_id, camera in network.camera_list.items():
+            for sync_id, sync_module in self.blinkpy.sync.items():
+                for camera_id, camera in sync_module.cameras.items():
                     cameras.append({
                         "id": camera_id,
                         "name": camera.name,
                         "status": camera.status,
-                        "network_id": network_id,
+                        "network_id": sync_id,
                         "enabled": camera.enabled,
                     })
         except Exception as e:
@@ -82,8 +95,8 @@ class BlinkService:
             await self.authenticate()
 
         try:
-            for network_id, network in self.blinkpy.networks.items():
-                for cam_id, camera in network.camera_list.items():
+            for sync_id, sync_module in self.blinkpy.sync.items():
+                for cam_id, camera in sync_module.cameras.items():
                     if cam_id == camera_id:
                         # Request thumbnail
                         thumbnail = await camera.get_thumbnail()
@@ -100,12 +113,12 @@ class BlinkService:
             await self.authenticate()
 
         try:
-            for network_id, network in self.blinkpy.networks.items():
-                if network_id == system_id:
+            for sync_id, sync_module in self.blinkpy.sync.items():
+                if sync_id == system_id:
                     if state:
-                        await network.arm()
+                        await sync_module.arm()
                     else:
-                        await network.disarm()
+                        await sync_module.disarm()
                     logger.info(f"System {system_id} armed={state}")
                     return True
         except Exception as e:
@@ -120,11 +133,11 @@ class BlinkService:
 
         clips = []
         try:
-            for network_id, network in self.blinkpy.networks.items():
-                for cam_id, camera in network.camera_list.items():
+            for sync_id, sync_module in self.blinkpy.sync.items():
+                for cam_id, camera in sync_module.cameras.items():
                     if cam_id == camera_id:
                         # Get media list from Blink (returns last N clips)
-                        media = await network.get_media_count()
+                        media = await sync_module.get_media_count()
                         if media:
                             clips.extend(media[:limit])
         except Exception as e:
