@@ -23,6 +23,24 @@ interface ModalContainer {
   logs?: string[];
 }
 
+interface ScheduledTask {
+  name: string;
+  last_run_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  run_count: number;
+  next_run_at: string | null;
+}
+
+interface TaskLog {
+  id: number;
+  task_name: string;
+  ran_at: string;
+  status: string;
+  message: string | null;
+  duration_ms: number | null;
+}
+
 const SERVICE_LINKS: Record<string, ServiceLink> = {
   'grafana': { port: 3030, label: 'Grafana' },
   'gitea': { port: 3003, label: 'Gitea' },
@@ -34,12 +52,14 @@ const SERVICE_LINKS: Record<string, ServiceLink> = {
 };
 
 export const InfraPanel: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'docker' | 'system' | 'k3s' | 'cluster'>('docker');
+  const [activeTab, setActiveTab] = useState<'docker' | 'system' | 'k3s' | 'cluster' | 'tasks'>('docker');
   const [containers, setContainers] = useState<any[]>([]);
   const [metrics, setMetrics] = useState<any>(null);
   const [k3sNodes, setK3sNodes] = useState<any[]>([]);
   const [clusterStatus, setClusterStatus] = useState<any>(null);
   const [clusterRouteInfo, setClusterRouteInfo] = useState<any>(null);
+  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+  const [taskLogs, setTaskLogs] = useState<TaskLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [controlError, setControlError] = useState('');
@@ -49,22 +69,27 @@ export const InfraPanel: React.FC = () => {
   const [pullModelName, setPullModelName] = useState('');
   const [selectedPullNode, setSelectedPullNode] = useState('');
   const [routeDropdownOpen, setRouteDropdownOpen] = useState<string | null>(null);
+  const [triggeringTask, setTriggeringTask] = useState<string | null>(null);
 
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [containerRes, metricsRes, k3sRes, clusterRes, routeRes] = await Promise.all([
+      const [containerRes, metricsRes, k3sRes, clusterRes, routeRes, tasksRes, logsRes] = await Promise.all([
         axios.get('/api/infra/containers'),
         axios.get('/api/infra/metrics'),
         axios.get('/api/infra/k3s/nodes'),
         api.cluster.status(),
         api.cluster.routeInfo(),
+        axios.get('/api/infra/tasks'),
+        axios.get('/api/infra/tasks/logs?limit=20'),
       ]);
       setContainers(containerRes.data.containers || []);
       setMetrics(metricsRes.data);
       setK3sNodes(k3sRes.data.nodes || []);
       setClusterStatus(clusterRes.data);
       setClusterRouteInfo(routeRes.data);
+      setScheduledTasks(tasksRes.data.tasks || []);
+      setTaskLogs(logsRes.data.logs || []);
     } catch (err: any) {
       setError(err.response?.data?.error || String(err));
     } finally {
@@ -122,6 +147,30 @@ export const InfraPanel: React.FC = () => {
       await fetchData();
     } catch (err: any) {
       setControlError(`Failed to set route: ${err.response?.data?.error || err.message}`);
+    }
+  };
+
+  const handleRunTask = async (taskName: string) => {
+    try {
+      setTriggeringTask(taskName);
+      await axios.post(`/api/infra/tasks/${taskName}/run`);
+      // Optimistically update status
+      setScheduledTasks(prev =>
+        prev.map(t => t.name === taskName ? { ...t, last_status: 'running' } : t)
+      );
+      // Refresh after 2s
+      setTimeout(async () => {
+        const [tasksRes, logsRes] = await Promise.all([
+          axios.get('/api/infra/tasks'),
+          axios.get('/api/infra/tasks/logs?limit=20'),
+        ]);
+        setScheduledTasks(tasksRes.data.tasks || []);
+        setTaskLogs(logsRes.data.logs || []);
+        setTriggeringTask(null);
+      }, 2000);
+    } catch (err: any) {
+      setError(`Failed to trigger task: ${err.response?.data?.detail || err.message}`);
+      setTriggeringTask(null);
     }
   };
 
@@ -188,6 +237,16 @@ export const InfraPanel: React.FC = () => {
             }`}
           >
             Cluster
+          </button>
+          <button
+            onClick={() => setActiveTab('tasks')}
+            className={`px-3 py-2 rounded text-sm font-medium transition-colors ${
+              activeTab === 'tasks'
+                ? 'bg-obsidian-accent text-obsidian-bg'
+                : 'bg-obsidian-bg-secondary text-obsidian-text hover:bg-obsidian-bg-secondary/80'
+            }`}
+          >
+            Tasks
           </button>
         </div>
       </div>
@@ -509,6 +568,100 @@ export const InfraPanel: React.FC = () => {
               <div className="text-xs text-obsidian-text-muted pt-1">
                 Fallback: {clusterStatus.routing.fallback_node}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tasks Tab */}
+      {activeTab === 'tasks' && (
+        <div className="flex-1 flex flex-col overflow-hidden p-4 gap-4">
+          {/* Task Cards */}
+          <div>
+            <h3 className="font-semibold text-obsidian-text mb-3 text-sm">Scheduled Tasks</h3>
+            <div className="space-y-2">
+              {scheduledTasks.map(task => (
+                <div key={task.name} className="glass-card p-3 rounded border border-obsidian-border">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          task.last_status === 'success' ? 'bg-obsidian-success' :
+                          task.last_status === 'error'   ? 'bg-obsidian-error' :
+                          task.last_status === 'running' ? 'bg-obsidian-warning animate-pulse' :
+                          'bg-obsidian-border'
+                        }`} />
+                        <span className="text-sm font-medium text-obsidian-text">{task.name.replace(/_/g, ' ')}</span>
+                        {task.last_status && (
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                            task.last_status === 'success' ? 'bg-obsidian-success/20 text-obsidian-success' :
+                            task.last_status === 'error'   ? 'bg-obsidian-error/20 text-obsidian-error' :
+                            'bg-obsidian-warning/20 text-obsidian-warning'
+                          }`}>
+                            {task.last_status}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-obsidian-text-muted space-y-0.5">
+                        {task.last_run_at && (
+                          <div>Last run: {new Date(task.last_run_at).toLocaleString()}</div>
+                        )}
+                        {task.next_run_at && (
+                          <div>Next run: {new Date(task.next_run_at).toLocaleString()}</div>
+                        )}
+                        <div>Run count: {task.run_count}</div>
+                        {task.last_error && (
+                          <div className="text-obsidian-error truncate" title={task.last_error}>
+                            Error: {task.last_error}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleRunTask(task.name)}
+                      disabled={triggeringTask === task.name}
+                      className="text-xs ml-3 flex-shrink-0"
+                    >
+                      {triggeringTask === task.name ? '...' : 'Run Now'}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Recent Logs */}
+          <div className="flex-1 overflow-hidden">
+            <h3 className="font-semibold text-obsidian-text mb-3 text-sm">Recent Logs</h3>
+            <div className="overflow-y-auto space-y-1 max-h-64">
+              {taskLogs.length === 0 && (
+                <div className="text-sm text-obsidian-text-muted">No logs yet</div>
+              )}
+              {taskLogs.map(log => (
+                <div key={log.id} className="glass-card px-3 py-2 rounded border border-obsidian-border text-xs">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="font-medium text-obsidian-text">{log.task_name.replace(/_/g, ' ')}</span>
+                    <div className="flex items-center gap-2">
+                      {log.duration_ms && (
+                        <span className="text-obsidian-text-muted">{log.duration_ms}ms</span>
+                      )}
+                      <span className={log.status === 'success' ? 'text-obsidian-success' : 'text-obsidian-error'}>
+                        {log.status}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-obsidian-text-muted">
+                    {new Date(log.ran_at).toLocaleString()}
+                  </div>
+                  {log.message && (
+                    <div className="text-obsidian-text mt-0.5 truncate" title={log.message}>
+                      {log.message}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         </div>

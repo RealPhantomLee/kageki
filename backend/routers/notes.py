@@ -4,7 +4,8 @@ Notes endpoints for managing personal notes and documents.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, date
+from pathlib import Path
 from typing import Optional
 
 import aiosqlite
@@ -77,6 +78,83 @@ async def list_notes():
 
         return {"notes": notes}
 
+    finally:
+        await db.close()
+
+
+TEMPLATE_DIR = Path(__file__).parent.parent.parent / "data" / "templates"
+
+
+@router.get("/daily")
+async def get_or_create_daily_note():
+    """
+    Find or create today's daily note.
+
+    Returns the full note object. If no note titled YYYY-MM-DD exists,
+    creates one from /data/templates/daily_note.md, substituting {{DATE}}.
+
+    Returns: {"id": "...", "title": "...", "content": "...", "tags": [...],
+              "outgoing_links": [...], "created_at": "...", "updated_at": "..."}
+    """
+    today = date.today().isoformat()
+
+    db = await get_connection()
+    try:
+        # Check for existing note with today's title
+        cursor = await db.execute(
+            "SELECT id FROM notes WHERE title = ? LIMIT 1",
+            (today,),
+        )
+        row = await cursor.fetchone()
+
+        if row:
+            note_id = row[0]
+        else:
+            # Load and render template
+            template_path = TEMPLATE_DIR / "daily_note.md"
+            if template_path.exists():
+                template = template_path.read_text()
+                content = template.replace("{{DATE}}", today)
+            else:
+                content = f"# {today}\n\n"
+
+            note_id = str(uuid.uuid4())
+            now = datetime.utcnow().isoformat()
+            links = extract_links(content)
+            tags = extract_tags(content)
+            content_hash = compute_content_hash(content)
+            links_json = serialize_json_field(links)
+            tags_json = serialize_json_field(tags)
+
+            await db.execute(
+                """
+                INSERT INTO notes (id, title, content, tags, outgoing_links, content_hash, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (note_id, today, content, tags_json, links_json, content_hash, now, now),
+            )
+            await db.commit()
+            log.info(f"Created daily note for {today}: {note_id}")
+
+        # Fetch and return the full note
+        cursor = await db.execute(
+            "SELECT id, title, content, tags, outgoing_links, created_at, updated_at FROM notes WHERE id = ?",
+            (note_id,),
+        )
+        note_row = await cursor.fetchone()
+        nid, title, content, tags_json, links_json, created_at, updated_at = note_row
+        return {
+            "id": nid,
+            "title": title,
+            "content": content,
+            "tags": deserialize_json_field(tags_json),
+            "outgoing_links": deserialize_json_field(links_json),
+            "created_at": created_at,
+            "updated_at": updated_at,
+        }
+    except Exception as e:
+        log.error(f"Error in daily note: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get/create daily note")
     finally:
         await db.close()
 

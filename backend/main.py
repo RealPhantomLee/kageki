@@ -11,9 +11,10 @@ import aiomqtt
 
 from backend.config import get_settings
 from backend.db.connection import run_migrations_async, get_connection
-from backend.routers import homeassistant, ai, security, notes, push, cluster, infra
+from backend.routers import homeassistant, ai, security, notes, push, cluster, infra, canvas
 from backend.services.ai_service import DeepSeekClient
 from backend.services.ollama_cluster import get_ollama_cluster
+from backend.services.scheduler import start_scheduler, stop_scheduler
 
 log = logging.getLogger(__name__)
 
@@ -201,6 +202,9 @@ async def lifespan(app: FastAPI):
     print("Starting MQTT subscriber...")
     mqtt_task = asyncio.create_task(mqtt_subscriber())
 
+    print("Starting Phantom Scheduler...")
+    await start_scheduler()
+
     yield
 
     # Shutdown
@@ -209,6 +213,8 @@ async def lifespan(app: FastAPI):
         await mqtt_task
     except asyncio.CancelledError:
         pass
+
+    await stop_scheduler()
 
 
 app = FastAPI(
@@ -235,6 +241,7 @@ app.include_router(homeassistant.router)
 app.include_router(push.router)
 app.include_router(cluster.router)
 app.include_router(infra.router)
+app.include_router(canvas.router)
 
 
 @app.get("/health")

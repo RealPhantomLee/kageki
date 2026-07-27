@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from backend.db.connection import get_connection
+from backend.services.scheduler import trigger_task_now
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/infra", tags=["infra"])
@@ -229,3 +230,85 @@ async def restart_container(name: str):
     except Exception as e:
         log.error(f"Error restarting container {name}: {e}")
         raise HTTPException(status_code=503, detail=f"Failed to restart container: {str(e)}")
+
+
+@router.get("/tasks")
+async def list_scheduled_tasks():
+    """
+    List all scheduled tasks with their status.
+
+    Returns: {"tasks": [{"name", "last_run_at", "last_status", "last_error", "run_count", "next_run_at"}]}
+    """
+    db = await get_connection()
+    try:
+        cursor = await db.execute(
+            """
+            SELECT name, last_run_at, last_status, last_error, run_count, next_run_at
+            FROM scheduled_tasks
+            ORDER BY name
+            """
+        )
+        rows = await cursor.fetchall()
+        tasks = [
+            {
+                "name": r[0],
+                "last_run_at": r[1],
+                "last_status": r[2],
+                "last_error": r[3],
+                "run_count": r[4],
+                "next_run_at": r[5],
+            }
+            for r in rows
+        ]
+        return {"tasks": tasks}
+    finally:
+        await db.close()
+
+
+@router.post("/tasks/{name}/run")
+async def run_task_now(name: str):
+    """
+    Manually trigger a scheduled task by name.
+
+    Returns: {"status": "triggered", "name": "..."}  or 404 if name unknown.
+    """
+    triggered = await trigger_task_now(name)
+    if not triggered:
+        raise HTTPException(status_code=404, detail=f"Unknown task: {name}")
+    log.info(f"Manually triggered task: {name}")
+    return {"status": "triggered", "name": name}
+
+
+@router.get("/tasks/logs")
+async def get_task_logs(limit: int = 50):
+    """
+    Recent scheduler execution logs.
+
+    Returns: {"logs": [{"id", "task_name", "ran_at", "status", "message", "duration_ms"}]}
+    """
+    db = await get_connection()
+    try:
+        cursor = await db.execute(
+            """
+            SELECT id, task_name, ran_at, status, message, duration_ms
+            FROM scheduler_logs
+            ORDER BY ran_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        logs = [
+            {
+                "id": r[0],
+                "task_name": r[1],
+                "ran_at": r[2],
+                "status": r[3],
+                "message": r[4],
+                "duration_ms": r[5],
+            }
+            for r in rows
+        ]
+        return {"logs": logs}
+    finally:
+        await db.close()

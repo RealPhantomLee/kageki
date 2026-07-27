@@ -93,8 +93,8 @@ export interface SyncMessage extends WebSocketMessage {
 }
 
 export interface AppStore {
-  activeTab: "home" | "notes" | "security" | "infrastructure";
-  setActiveTab: (tab: "home" | "notes" | "security" | "infrastructure") => void;
+  activeTab: "home" | "notes" | "security" | "infrastructure" | "canvas";
+  setActiveTab: (tab: "home" | "notes" | "security" | "infrastructure" | "canvas") => void;
 
   isInstallPromptVisible: boolean;
   setInstallPromptVisible: (visible: boolean) => void;

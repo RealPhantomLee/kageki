@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-One-time Blink 2FA authentication helper.
-Run this once to generate blink_credentials.json, then start phantom-motion.
+One-time Blink authentication helper. Simplified version.
 """
 
 import asyncio
@@ -19,42 +18,55 @@ async def main():
     import aiohttp
     from blinkpy.blinkpy import Blink
     from blinkpy.auth import Auth
-    from blinkpy.helpers.util import json_load
 
     settings = get_settings()
 
     print(f"Logging in as {settings.blink.username} ...")
 
     session = aiohttp.ClientSession()
-    blink = Blink(session=session)
-
-    auth = Auth({"username": settings.blink.username, "password": settings.blink.password})
-    blink.auth = auth
-
     try:
-        await blink.start()
-    except Exception:
-        pass
+        blink = Blink(session=session)
 
-    if not blink.auth.is_errored:
-        # May have prompted for 2FA during start — check
-        pass
-    else:
-        code = input("Enter the 2FA code sent to your email/phone: ").strip()
-        await blink.auth.send_auth_key(blink, code)
-        await blink.setup_post_verify()
+        # Create auth with credentials
+        auth = Auth({"username": settings.blink.username, "password": settings.blink.password})
+        blink.auth = auth
 
-    CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(CREDS_PATH, "w") as f:
-        json.dump(blink.auth.login_attributes, f, indent=2)
+        # Startup will raise BlinkTwoFARequiredError if 2FA is needed
+        try:
+            await blink.auth.startup()
+            print("✓ Startup successful (no 2FA required)")
+        except Exception as e:
+            if "TwoFA" in type(e).__name__:
+                print(f"ℹ 2FA required on this account")
+                code = input("Enter the 2FA code sent to your email/phone: ").strip()
+                try:
+                    result = await blink.auth.complete_2fa_login(code)
+                    print(f"✓ 2FA verification result: {result}")
+                except Exception as e2:
+                    print(f"⚠ 2FA code rejected: {e2}")
+                    print("  The code may be expired, incorrect, or 2FA may not be properly configured on the account.")
+                    print("  Check your Blink app for the current 2FA settings.")
+            else:
+                print(f"✗ Startup failed: {e}")
+                raise
 
-    cameras = list(blink.cameras.keys())
-    print(f"\nSuccess! Cameras found: {cameras}")
-    print(f"Credentials saved to: {CREDS_PATH}")
-    print("\nNow enable phantom-motion:")
-    print("  sudo systemctl enable --now phantom-motion")
+        # Save credentials
+        CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(CREDS_PATH, "w") as f:
+            json.dump(blink.auth.login_attributes, f, indent=2)
 
-    await session.close()
+        token_status = "YES ✓" if blink.auth.login_attributes.get("token") else "NO ✗"
+        print(f"\n✓ Credentials saved to: {CREDS_PATH}")
+        print(f"✓ Token acquired: {token_status}")
+        
+        if blink.auth.login_attributes.get("token"):
+            print("\nNow enable phantom-motion:")
+            print("  sudo systemctl enable --now phantom-motion")
+        else:
+            print("\n⚠ Warning: No token acquired. Check your Blink account.")
+
+    finally:
+        await session.close()
 
 
 if __name__ == "__main__":

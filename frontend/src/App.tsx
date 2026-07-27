@@ -4,6 +4,7 @@ import { HomePanel } from "./panels/HomePanel";
 import { NotesPanel } from "./panels/NotesPanel";
 import { SecurityPanel } from "./panels/SecurityPanel";
 import { InfraPanel } from "./panels/InfraPanel";
+import { CanvasPanel } from "./panels/CanvasPanel";
 
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -42,11 +43,12 @@ export const App: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !isMobile) {
-        const tabMap: Record<string, "home" | "notes" | "security" | "infrastructure"> = {
+        const tabMap: Record<string, "home" | "notes" | "security" | "infrastructure" | "canvas"> = {
           '1': 'home',
           '2': 'notes',
           '3': 'security',
           '4': 'infrastructure',
+          '5': 'canvas',
         };
 
         if (tabMap[e.key]) {
@@ -68,11 +70,12 @@ export const App: React.FC = () => {
   const handleTouchEnd = (e: React.TouchEvent) => {
     setTouchEndX(e.changedTouches[0].clientX);
 
-    const tabOrder: ("home" | "notes" | "security" | "infrastructure")[] = [
+    const tabOrder: ("home" | "notes" | "security" | "infrastructure" | "canvas")[] = [
       "home",
       "notes",
       "security",
       "infrastructure",
+      "canvas",
     ];
 
     const currentIndex = tabOrder.indexOf(activeTab as any);
@@ -175,7 +178,7 @@ export const App: React.FC = () => {
     }
   }, [installPrompt]);
 
-  const handleTabChange = (tab: "home" | "notes" | "security" | "infrastructure") => {
+  const handleTabChange = (tab: "home" | "notes" | "security" | "infrastructure" | "canvas") => {
     setActiveTab(tab);
     setMenuOpen(false);
   };
@@ -190,6 +193,8 @@ export const App: React.FC = () => {
         return <SecurityPanel />;
       case "infrastructure":
         return <InfraPanel />;
+      case "canvas":
+        return <CanvasPanel />;
       default:
         return <HomePanel />;
     }
@@ -200,6 +205,7 @@ export const App: React.FC = () => {
     { id: "notes", label: "Notes", icon: "📝" },
     { id: "security", label: "Security", icon: "🔒" },
     { id: "infrastructure", label: "Infrastructure", icon: "⚡" },
+    { id: "canvas", label: "Canvas", icon: "🗺" },
   ] as const;
 
   if (isMobile) {
@@ -227,7 +233,7 @@ export const App: React.FC = () => {
               {navItems.map(({ id, label, icon }) => (
                 <button
                   key={id}
-                  onClick={() => handleTabChange(id as "home" | "notes" | "security" | "infrastructure")}
+                  onClick={() => handleTabChange(id as "home" | "notes" | "security" | "infrastructure" | "canvas")}
                   className={`px-4 py-3 text-left transition ${
                     activeTab === id
                       ? "bg-obsidian-accent text-white font-semibold"

@@ -56,6 +56,7 @@ export const api = {
   notes: {
     list: () => apiClient.get('/api/notes'),
     get: (noteId: string) => apiClient.get(`/api/notes/${noteId}`),
+    daily: () => apiClient.get('/api/notes/daily'),
     create: (data: any) => apiClient.post('/api/notes', data),
     update: (noteId: string, data: any) => apiClient.put(`/api/notes/${noteId}`, data),
     delete: (noteId: string) => apiClient.delete(`/api/notes/${noteId}`),
@@ -80,6 +81,13 @@ export const api = {
       apiClient.post(`/api/cluster/pull/${modelName}`, {}, { params: node ? { node } : {} }),
     setRoute: (type: 'llm' | 'embeddings', targetNode: string) =>
       apiClient.post('/api/cluster/route', { type, target_node: targetNode }),
+  },
+
+  // Scheduled tasks endpoints
+  tasks: {
+    list: () => apiClient.get('/api/infra/tasks'),
+    run: (name: string) => apiClient.post(`/api/infra/tasks/${name}/run`),
+    logs: (limit = 50) => apiClient.get('/api/infra/tasks/logs', { params: { limit } }),
   },
 
   // Health check

@@ -17,3 +17,4 @@ python-telegram-bot==20.3
 cryptography==41.0.7
 numpy==1.24.3
 html2text==2024.2.26
+APScheduler==3.10.4

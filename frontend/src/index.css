@@ -365,3 +365,23 @@ code, pre, [role="code"] {
   color: #a855f7;
   font-weight: 600;
 }
+
+/* Callout styling */
+.callout {
+  position: relative;
+}
+
+.callout-title {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.task-list-item {
+  list-style: none;
+  margin-left: -1em;
+}
+
+/* ReactFlow node selection override */
+.react-flow__node.selected > div {
+  border-color: #a855f7 !important;
+}

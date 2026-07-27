@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useNotesStore } from '../stores/notes';
 import { createSyncWSManager } from '../api/websocket';
 import type { SyncMessage } from '../types/index';
+import { apiClient } from '../api/client';
 import axios from 'axios';
 import { formatDistanceToNow } from 'date-fns';
 import { marked, Renderer } from 'marked';
@@ -9,14 +10,81 @@ import hljs from 'highlight.js';
 import 'highlight.js/styles/atom-one-dark.css';
 import JSZip from 'jszip';
 
-// Configure marked with custom renderer for syntax highlighting
+// Configure marked with custom renderer for syntax highlighting and callouts
 const renderer = new Renderer();
+
 renderer.code = ({ text, language }) => {
   const validLang = language && hljs.getLanguage(language) ? language : 'plaintext';
   const highlighted = hljs.highlight(text, { language: validLang }).value;
   return `<pre><code class="hljs language-${validLang}">${highlighted}</code></pre>`;
 };
+
+// Callout renderer: intercepts > [!TYPE] blockquotes
+renderer.blockquote = ({ tokens }) => {
+  const raw = tokens.map(t => ('text' in t ? t.text : '')).join('');
+  const match = raw.match(/^\[!(INFO|WARNING|ERROR|CHECK|NOTE|TIP)\](.*)/si);
+
+  if (match) {
+    const type = match[1].toUpperCase();
+    const restContent = match[2].trim();
+    const styles: Record<string, {border: string, bg: string, icon: string}> = {
+      INFO:    {border: 'border-obsidian-accent',  bg: 'bg-obsidian-accent/10',  icon: 'ℹ️'},
+      NOTE:    {border: 'border-obsidian-accent',  bg: 'bg-obsidian-accent/10',  icon: '📝'},
+      TIP:     {border: 'border-obsidian-success', bg: 'bg-obsidian-success/10', icon: '💡'},
+      WARNING: {border: 'border-obsidian-warning', bg: 'bg-obsidian-warning/10', icon: '⚠️'},
+      ERROR:   {border: 'border-obsidian-error',   bg: 'bg-obsidian-error/10',   icon: '🚫'},
+      CHECK:   {border: 'border-obsidian-success', bg: 'bg-obsidian-success/10', icon: '✅'},
+    };
+    const s = styles[type] || styles.INFO;
+    return `<div class="callout rounded-lg border-l-4 ${s.border} ${s.bg} p-3 my-3">
+      <div class="callout-title flex items-center gap-2 font-semibold text-sm mb-1">${s.icon} ${type}</div>
+      <div class="text-sm">${marked.parse(restContent)}</div></div>`;
+  }
+
+  return `<blockquote class="border-l-4 border-obsidian-accent pl-4 italic text-obsidian-text-muted my-3">${marked.parser(tokens)}</blockquote>`;
+};
+
+// List item renderer for checkboxes
+renderer.listitem = ({ text, task, checked }) => {
+  if (task) {
+    const checkedAttr = checked ? 'checked' : '';
+    return `<li class="task-list-item flex items-start gap-2">
+      <input type="checkbox" ${checkedAttr} data-task-checkbox class="mt-1 accent-obsidian-accent cursor-pointer" />
+      <span>${text.replace(/^<input[^>]+>/, '')}</span>
+    </li>`;
+  }
+  return `<li>${text}</li>`;
+};
+
 marked.use({ renderer });
+
+// Frontmatter helper functions
+const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---/;
+
+const parseFrontmatter = (content: string): { hasFm: boolean; body: string; tags: string[]; aliases: string[] } => {
+  const match = content.match(FRONTMATTER_RE);
+  if (!match) return { hasFm: false, body: content, tags: [], aliases: [] };
+  const fm = match[1];
+  const body = content.slice(match[0].length).trimStart();
+  const tagsMatch = fm.match(/^tags:\s*\[([^\]]*)\]/m);
+  const aliasMatch = fm.match(/^aliases:\s*\[([^\]]*)\]/m);
+  const tags = tagsMatch ? tagsMatch[1].split(',').map(t => t.trim().replace(/['\"]/g, '')).filter(Boolean) : [];
+  const aliases = aliasMatch ? aliasMatch[1].split(',').map(a => a.trim().replace(/['\"]/g, '')).filter(Boolean) : [];
+  return { hasFm: true, body, tags, aliases };
+};
+
+const updateFrontmatter = (content: string, newTags: string[], newAliases: string[]): string => {
+  const tagsYaml = `tags: [${newTags.map(t => `"${t}"`).join(', ')}]`;
+  const aliasYaml = newAliases.length ? `aliases: [${newAliases.map(a => `"${a}"`).join(', ')}]` : '';
+  const fmLines = [tagsYaml, aliasYaml].filter(Boolean).join('\n');
+  const newFm = `---\n${fmLines}\n---`;
+
+  const match = content.match(FRONTMATTER_RE);
+  if (match) {
+    return content.replace(FRONTMATTER_RE, newFm);
+  }
+  return `${newFm}\n\n${content}`;
+};
 
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -25,7 +93,7 @@ import { ScrollArea } from '../components/ui/scroll-area';
 import { Separator } from '../components/ui/separator';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import * as d3 from 'd3';
-import { Search, Plus, Trash2, Share2, Zap, MessageCircle, Upload } from 'lucide-react';
+import { Search, Plus, Trash2, Share2, Zap, MessageCircle, Upload, Calendar } from 'lucide-react';
 
 export const NotesPanel: React.FC = () => {
   const {
@@ -62,6 +130,7 @@ export const NotesPanel: React.FC = () => {
   const [chatLoading, setChatLoading] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [paletteSelectedIdx, setPaletteSelectedIdx] = useState(0);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importSource, setImportSource] = useState<string>('markdown');
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -69,10 +138,15 @@ export const NotesPanel: React.FC = () => {
   const [importLoading, setImportLoading] = useState(false);
   const [importDragOver, setImportDragOver] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showFrontmatter, setShowFrontmatter] = useState(false);
+  const [fmTags, setFmTags] = useState<string[]>([]);
+  const [fmAliases, setFmAliases] = useState<string[]>([]);
+  const [fmTagInput, setFmTagInput] = useState('');
   const wsManagerRef = useRef<ReturnType<typeof createSyncWSManager> | null>(null);
   const saveTimeoutRef = useRef<NodeJS.Timer | null>(null);
   const graphContainerRef = useRef<SVGSVGElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
 
   // Load notes on mount
   useEffect(() => {
@@ -140,18 +214,30 @@ export const NotesPanel: React.FC = () => {
     setKeyPoints([]);
   }, [activeNoteId, getActiveNote]);
 
+  // Sync frontmatter state when note changes
+  useEffect(() => {
+    if (activeNoteId) {
+      const { tags, aliases } = parseFrontmatter(editorContent);
+      setFmTags(tags);
+      setFmAliases(aliases);
+    }
+  }, [activeNoteId]);
+
   // Command palette shortcut (Cmd+P)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'p') {
         e.preventDefault();
-        setCommandPaletteOpen(!commandPaletteOpen);
+        setCommandPaletteOpen(prev => {
+          if (prev) { setSearchQuery(''); setPaletteSelectedIdx(0); }
+          return !prev;
+        });
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commandPaletteOpen]);
+  }, []);
 
   // Auto-save on content change
   useEffect(() => {
@@ -178,6 +264,11 @@ export const NotesPanel: React.FC = () => {
       }
     };
   }, [activeNoteId, editorContent, saveNote]);
+
+  // Reset palette selection on query change
+  useEffect(() => {
+    setPaletteSelectedIdx(0);
+  }, [searchQuery]);
 
   // Draw graph
   useEffect(() => {
@@ -276,6 +367,67 @@ export const NotesPanel: React.FC = () => {
     } catch (err) {
       console.error('Failed to create note:', err);
     }
+  };
+
+  const handleDailyNote = async () => {
+    try {
+      const response = await apiClient.get('/api/notes/daily');
+      const note = response.data;
+      const existing = notes.find(n => n.id === note.id);
+      if (!existing) {
+        useNotesStore.setState((state) => ({
+          notes: [note, ...state.notes],
+        }));
+      }
+      setActiveNote(note.id);
+    } catch (err) {
+      console.error('Failed to load daily note:', err);
+    }
+  };
+
+  const handlePreviewClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target instanceof HTMLInputElement && target.dataset.taskCheckbox !== undefined) {
+      e.preventDefault();
+      const checkbox = target;
+      const isChecked = checkbox.checked;
+
+      // Find position of this checkbox in the raw markdown
+      const allCheckboxes = previewRef.current?.querySelectorAll('[data-task-checkbox]');
+      if (!allCheckboxes) return;
+      const index = Array.from(allCheckboxes).indexOf(checkbox);
+
+      // Toggle the corresponding markdown checkbox
+      let count = -1;
+      const newContent = editorContent.replace(/- \[([ x])(?:\])/gi, (match) => {
+        count++;
+        if (count === index) {
+          return isChecked ? '- [x]' : '- [ ]';
+        }
+        return match;
+      });
+
+      setEditorContent(newContent);
+    }
+  };
+
+  const handlePaletteKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setPaletteSelectedIdx(i => Math.min(i + 1, paletteResults.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setPaletteSelectedIdx(i => Math.max(i - 1, 0));
+    } else if (e.key === 'Enter' && paletteResults[paletteSelectedIdx]) {
+      setActiveNote(paletteResults[paletteSelectedIdx].id);
+      setCommandPaletteOpen(false);
+      setSearchQuery('');
+    }
+  };
+
+  const handleFmSave = () => {
+    const updated = updateFrontmatter(editorContent, fmTags, fmAliases);
+    setEditorContent(updated);
   };
 
   const handleDeleteNote = async () => {
@@ -509,6 +661,29 @@ export const NotesPanel: React.FC = () => {
   const activeNote = getActiveNote();
   const backlinks = notes.filter((n) => (n.outgoing_links || []).includes(activeNoteId || ''));
 
+  const paletteResults = React.useMemo(() => {
+    if (!searchQuery.trim()) return notes.slice(0, 10);
+    const fuzzyScore = (haystack: string, needle: string): number => {
+      const h = haystack.toLowerCase();
+      const n = needle.toLowerCase();
+      if (!n) return 1;
+      let score = 0, hi = 0;
+      for (const ch of n) {
+        const pos = h.indexOf(ch, hi);
+        if (pos === -1) return 0;
+        score += 1 / (pos - hi + 1);
+        hi = pos + 1;
+      }
+      return score;
+    };
+    return notes
+      .map(n => ({ note: n, score: fuzzyScore(n.title, searchQuery) }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10)
+      .map(({ note }) => note);
+  }, [notes, searchQuery]);
+
   return (
     <div className="h-full flex flex-col bg-obsidian-bg text-obsidian-text">
       {/* 4-Zone Layout */}
@@ -540,6 +715,15 @@ export const NotesPanel: React.FC = () => {
               >
                 <Upload className="w-4 h-4 mr-2" />
                 Import
+              </Button>
+
+              <Button
+                onClick={handleDailyNote}
+                variant="outline"
+                className="w-full"
+              >
+                <Calendar className="w-4 h-4 mr-2" />
+                Today
               </Button>
 
               {wsConnected && (
@@ -624,6 +808,66 @@ export const NotesPanel: React.FC = () => {
                 </div>
               </div>
 
+              {/* Frontmatter Collapsible */}
+              <div className="border-b border-obsidian-border">
+                <button
+                  onClick={() => setShowFrontmatter(!showFrontmatter)}
+                  className="w-full flex items-center gap-2 px-6 py-2 text-xs text-obsidian-text-muted hover:bg-obsidian-surface-hover transition"
+                >
+                  <span>{showFrontmatter ? '▼' : '▶'}</span>
+                  <span>Frontmatter</span>
+                  {fmTags.length > 0 && (
+                    <span className="text-obsidian-accent">{fmTags.length} tag{fmTags.length !== 1 ? 's' : ''}</span>
+                  )}
+                </button>
+
+                {showFrontmatter && (
+                  <div className="px-6 py-3 bg-obsidian-surface-hover/30 space-y-3">
+                    {/* Tags */}
+                    <div>
+                      <label className="text-xs font-semibold text-obsidian-text-muted block mb-1">Tags</label>
+                      <div className="flex flex-wrap gap-1 mb-1">
+                        {fmTags.map((tag, i) => (
+                          <span key={i} className="flex items-center gap-1 bg-obsidian-accent/20 text-obsidian-accent text-xs px-2 py-0.5 rounded-full">
+                            {tag}
+                            <button onClick={() => { const t = fmTags.filter((_, j) => j !== i); setFmTags(t); }} className="hover:text-white">×</button>
+                          </span>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={fmTagInput}
+                          onChange={e => setFmTagInput(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' && fmTagInput.trim()) {
+                              setFmTags([...fmTags, fmTagInput.trim()]);
+                              setFmTagInput('');
+                            }
+                          }}
+                          placeholder="Add tag, press Enter"
+                          className="flex-1 bg-obsidian-surface-hover border border-obsidian-border text-obsidian-text text-xs px-2 py-1 rounded outline-none focus:border-obsidian-accent"
+                        />
+                        <Button size="sm" variant="outline" onClick={handleFmSave} className="text-xs">Save</Button>
+                      </div>
+                    </div>
+
+                    {/* Aliases */}
+                    <div>
+                      <label className="text-xs font-semibold text-obsidian-text-muted block mb-1">Aliases</label>
+                      <div className="flex flex-wrap gap-1">
+                        {fmAliases.map((alias, i) => (
+                          <span key={i} className="flex items-center gap-1 bg-obsidian-surface-hover text-obsidian-text text-xs px-2 py-0.5 rounded-full border border-obsidian-border">
+                            {alias}
+                            <button onClick={() => setFmAliases(fmAliases.filter((_, j) => j !== i))} className="hover:text-white">×</button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Editor with Split View Toggle */}
               <div className={`flex-1 overflow-hidden flex ${showPreview ? 'gap-4' : ''}`}>
                 {/* Raw Markdown */}
@@ -642,6 +886,8 @@ export const NotesPanel: React.FC = () => {
                     <Separator orientation="vertical" />
                     <div className="w-1/2 overflow-y-auto p-6 h-full">
                       <div
+                        ref={previewRef}
+                        onClick={handlePreviewClick}
                         className="prose prose-invert max-w-none text-obsidian-text"
                         dangerouslySetInnerHTML={{
                           __html: marked.parse(editorContent) as string,
@@ -974,6 +1220,54 @@ export const NotesPanel: React.FC = () => {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Command Palette */}
+      <Dialog open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen}>
+        <DialogContent
+          className="fixed left-[50%] top-[10%] translate-x-[-50%] translate-y-0 w-full max-w-lg p-0 gap-0 border border-obsidian-border bg-obsidian-surface"
+        >
+          {/* Search Input */}
+          <div className="flex items-center gap-2 p-3 border-b border-obsidian-border">
+            <Search className="w-4 h-4 text-obsidian-text-muted flex-shrink-0" />
+            <input
+              autoFocus
+              type="text"
+              placeholder="Search notes..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              onKeyDown={handlePaletteKeyDown}
+              className="flex-1 bg-transparent text-obsidian-text outline-none text-sm"
+            />
+            <kbd className="text-xs text-obsidian-text-muted border border-obsidian-border rounded px-1">Esc</kbd>
+          </div>
+          {/* Results */}
+          <div className="max-h-72 overflow-y-auto" id="palette-list">
+            {paletteResults.length === 0 && (
+              <div className="p-4 text-center text-obsidian-text-muted text-sm">No notes found</div>
+            )}
+            {paletteResults.map((note, idx) => (
+              <button
+                key={note.id}
+                onClick={() => {
+                  setActiveNote(note.id);
+                  setCommandPaletteOpen(false);
+                  setSearchQuery('');
+                }}
+                className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${
+                  idx === paletteSelectedIdx
+                    ? 'bg-obsidian-accent text-white'
+                    : 'text-obsidian-text hover:bg-obsidian-surface-hover'
+                }`}
+              >
+                <div className="font-medium truncate">{note.title || 'Untitled'}</div>
+                <div className="text-xs opacity-60 mt-0.5">
+                  {formatDistanceToNow(new Date(note.updated_at), { addSuffix: true })}
+                </div>
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
