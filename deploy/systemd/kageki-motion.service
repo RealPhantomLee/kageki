@@ -1,5 +1,5 @@
 [Unit]
-Description=Phantom Motion Monitor (Blink polling)
+Description=Kageki Motion Monitor (Blink polling)
 After=network.target mosquitto.service
 Wants=mosquitto.service
 

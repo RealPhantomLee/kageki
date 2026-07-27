@@ -1,5 +1,5 @@
 [Unit]
-Description=Phantom Portal FastAPI Backend
+Description=Kageki FastAPI Backend
 After=network.target mosquitto.service
 Wants=mosquitto.service
 

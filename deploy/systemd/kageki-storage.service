@@ -1,5 +1,5 @@
 [Unit]
-Description=Phantom Storage Cleanup (60-day retention)
+Description=Kageki Storage Cleanup (60-day retention)
 After=network.target
 
 [Service]

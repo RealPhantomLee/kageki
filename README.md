@@ -1,6 +1,6 @@
-# Phantom Portal
+# Kageki
 
-A unified, secure personal web portal combining home security (Kageki) and encrypted notes (VaultKeeper) into a single Progressive Web App.
+A unified, secure personal web portal combining home security and encrypted notes (VaultKeeper) into a single Progressive Web App. Formerly "Phantom Portal" — renamed back to Kageki, the original project name.
 
 ## Architecture
 

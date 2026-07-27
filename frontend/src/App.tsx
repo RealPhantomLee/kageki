@@ -250,7 +250,7 @@ export const App: React.FC = () => {
         {/* Install Prompt */}
         {installPrompt && !isPWAInstalled && (
           <div className="bg-obsidian-accent/20 border-b border-obsidian-accent px-4 py-2 flex items-center justify-between">
-            <span className="text-sm">Install Phantom Portal as an app</span>
+            <span className="text-sm">Install Kageki as an app</span>
             <div className="flex gap-2">
               <button
                 onClick={handleInstallApp}
@@ -351,7 +351,7 @@ export const App: React.FC = () => {
         {/* Top Status Bar */}
         <div className="glass-card px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <h1 className="text-lg font-bold text-obsidian-text">Phantom Portal</h1>
+            <h1 className="text-lg font-bold text-obsidian-text">Kageki</h1>
             <div className="text-sm text-obsidian-text-muted">
               {new Date().toLocaleDateString(undefined, {
                 weekday: "short",

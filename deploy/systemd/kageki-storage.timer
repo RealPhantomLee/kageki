@@ -1,6 +1,6 @@
 [Unit]
-Description=Phantom Storage Cleanup Timer
-Requires=phantom-storage.service
+Description=Kageki Storage Cleanup Timer
+Requires=kageki-storage.service
 
 [Timer]
 OnBootSec=5min
