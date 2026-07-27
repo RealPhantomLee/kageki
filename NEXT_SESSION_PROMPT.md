@@ -38,7 +38,6 @@ A unified personal web portal combining home security, notes, and home automatio
   - 18+ Docker containers (see container list below)
   - Ollama (host) — models: qwen2.5:1.5b, qwen2.5-coder (3b, 7b, 14b), gemma3:latest, deepseek-coder-v2:lite
 - **Python venv**: `/home/jolly/Projects/phantom/venv/` (Python 3.14.5)
-- **Sudo password**: REDACTED (use `echo "REDACTED" | sudo -S <command>`)
 - **NOTE**: /home/jolly has `chmod o+x` — nginx needs this to serve frontend files
 
 ### 2. aipi — AI INFERENCE NODE
@@ -174,8 +173,8 @@ A unified personal web portal combining home security, notes, and home automatio
 **Change**: `server localhost:8000;` → `server 127.0.0.1:8000;`  
 **Deploy**: 
 ```bash
-echo "REDACTED" | sudo -S cp /home/jolly/Projects/phantom/deploy/nginx/phantom.conf /etc/nginx/conf.d/phantom.conf
-echo "REDACTED" | sudo -S nginx -t && echo "REDACTED" | sudo -S systemctl reload nginx
+sudo cp /home/jolly/Projects/phantom/deploy/nginx/phantom.conf /etc/nginx/conf.d/phantom.conf
+sudo nginx -t && sudo systemctl reload nginx
 ```
 **Test**: `curl https://cyberdeck.tail3ab12c.ts.net/api/notes/`
 
@@ -218,7 +217,7 @@ The portal is functional but visually needs improvement. User wants it "way more
 cd /home/jolly/Projects/phantom/frontend
 npm run build  # or: pnpm run build
 # Then permissions must be set:
-echo "REDACTED" | sudo -S chmod -R o+rx /home/jolly/Projects/phantom/frontend/dist
+sudo chmod -R o+rx /home/jolly/Projects/phantom/frontend/dist
 ```
 
 ### Priority 3: Notes Import Feature
@@ -259,8 +258,8 @@ Import sources to implement:
 ```bash
 # Run on cyberdeck:
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--flannel-iface=tailscale0 --node-ip=100.121.96.1 --tls-san=100.121.96.1 --tls-san=cyberdeck.tail3ab12c.ts.net --disable=traefik" sh -
-echo "REDACTED" | sudo -S cat /var/lib/rancher/k3s/server/node-token  # save this
-echo "REDACTED" | sudo -S chmod 644 /etc/rancher/k3s/k3s.yaml
+sudo cat /var/lib/rancher/k3s/server/node-token  # save this
+sudo chmod 644 /etc/rancher/k3s/k3s.yaml
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 kubectl get nodes
 ```
@@ -364,13 +363,13 @@ Never do sequential steps that could run in parallel. Each agent should be brief
 
 ```bash
 # Restart backend after code changes:
-echo "REDACTED" | sudo -S systemctl restart phantom-backend
+sudo systemctl restart phantom-backend
 
 # Check status:
-echo "REDACTED" | sudo -S systemctl status phantom-backend --no-pager -l | tail -15
+sudo systemctl status phantom-backend --no-pager -l | tail -15
 
 # Check logs:
-echo "REDACTED" | sudo -S journalctl -u phantom-backend --no-pager -n 30
+sudo journalctl -u phantom-backend --no-pager -n 30
 ```
 
 ## Building and Deploying Frontend
@@ -379,8 +378,8 @@ echo "REDACTED" | sudo -S journalctl -u phantom-backend --no-pager -n 30
 cd /home/jolly/Projects/phantom/frontend
 npm run build
 # Fix permissions after build (required for nginx to read files):
-echo "REDACTED" | sudo -S chmod -R o+rx /home/jolly/Projects/phantom/frontend/dist
-echo "REDACTED" | sudo -S chmod o+x /home/jolly/Projects/phantom/frontend
+sudo chmod -R o+rx /home/jolly/Projects/phantom/frontend/dist
+sudo chmod o+x /home/jolly/Projects/phantom/frontend
 ```
 
 ## Testing the Stack
